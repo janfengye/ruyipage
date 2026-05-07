@@ -10,6 +10,7 @@ from queue import Queue, Empty
 
 from .._bidi import session as bidi_session
 from .._bidi.log import LogEntry
+from .._functions.queue_utils import queue_get as _queue_get
 
 import logging
 
@@ -112,7 +113,7 @@ class ConsoleListener(object):
         while time.time() < end:
             remaining = end - time.time()
             try:
-                entry = self._queue.get(timeout=min(remaining, 0.5))
+                entry = _queue_get(self._queue, timeout=min(remaining, 0.5))
                 if self._match(entry, level, text):
                     return entry
             except Empty:
@@ -177,8 +178,8 @@ class ConsoleListener(object):
         if cb:
             try:
                 cb(entry)
-            except Exception:
-                pass
+            except Exception as e:
+                logger.warning("控制台监听回调异常: %s", e)
 
     def _drain(self):
         while not self._queue.empty():

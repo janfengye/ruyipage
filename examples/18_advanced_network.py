@@ -3,15 +3,15 @@
 
 覆盖：
 1) beforeRequestSent 拦截 + 继续请求
-2) 修改请求头
-3) mock 响应
+2) 修改请求头（dict headers）
+3) mock 响应（dict headers）
 4) 阻止请求
-5) responseStarted 阶段修改响应状态
+5) responseStarted 阶段读取 response_status / response_headers 并修改
 6) 队列模式 wait() 手动处理
 7) fetchError 事件监听
 8) 直接读取请求体 req.body
 9) GET 请求高频字段读取
-10) POST 请求 wait() 模式读取 body
+10) collect_response + response_body 一步读取响应体
 """
 
 import io
@@ -73,22 +73,17 @@ def test_advanced_network():
         print(f"   拦截计数: {len(intercepted)}")
         page.intercept.stop()
 
-        # 2) 修改请求头
+        # 2) 修改请求头（dict headers）
         print("\n2. 修改请求头:")
 
         def header_handler(req):
             if "/api/headers" in req.url:
+                # dict 格式自动转换为 BiDi 格式
                 req.continue_request(
-                    headers=[
-                        {
-                            "name": "X-Ruyi-Demo",
-                            "value": {"type": "string", "value": "yes"},
-                        },
-                        {
-                            "name": "User-Agent",
-                            "value": {"type": "string", "value": "RuyiPage/Example18"},
-                        },
-                    ]
+                    headers={
+                        "X-Ruyi-Demo": "yes",
+                        "User-Agent": "RuyiPage/Example18",
+                    }
                 )
                 print("   ✓ 已注入请求头")
             else:
@@ -107,7 +102,7 @@ def test_advanced_network():
         )
         page.intercept.stop()
 
-        # 3) mock 响应
+        # 3) mock 响应（dict headers）
         print("\n3. mock 响应:")
 
         def mock_handler(req):
@@ -115,16 +110,10 @@ def test_advanced_network():
                 req.mock(
                     '{"status":"mocked","data":{"message":"这是Mock数据"}}',
                     status_code=200,
-                    headers=[
-                        {
-                            "name": "content-type",
-                            "value": {"type": "string", "value": "application/json"},
-                        },
-                        {
-                            "name": "access-control-allow-origin",
-                            "value": {"type": "string", "value": "*"},
-                        },
-                    ],
+                    headers={
+                        "content-type": "application/json",
+                        "access-control-allow-origin": "*",
+                    },
                 )
                 print("   ✓ 已返回Mock响应")
             else:
@@ -162,11 +151,15 @@ def test_advanced_network():
         print(f"   阻止结果: {blocked}")
         page.intercept.stop()
 
-        # 5) 响应阶段修改状态码
-        print("\n5. responseStarted 阶段修改响应状态码:")
+        # 5) responseStarted 阶段读取 + 修改状态码
+        print("\n5. responseStarted 阶段读取 response_status 并修改:")
 
         def response_handler(req):
             if "/api/data" in req.url:
+                print(f"   原始响应状态码: {req.response_status}")
+                if req.response_headers:
+                    ct = req.response_headers.get("content-type", "未知")
+                    print(f"   原始 content-type: {ct}")
                 req.continue_response(status_code=299, reason_phrase="RuyiModified")
                 print("   ✓ 响应状态码已改为 299")
             else:
@@ -281,9 +274,9 @@ def test_advanced_network():
             print("   ⚠ 未捕获到 GET 请求")
         print(f"   服务端返回类型: {type(get_resp).__name__}")
 
-        # 10) POST 请求 wait() 模式读取 body
-        print("\n10. POST 请求 wait() 模式读取 body:")
-        page.intercept.start(handler=None, phases=["beforeRequestSent"])
+        # 10) collect_response + response_body 一步读取响应体
+        print("\n10. collect_response + response_body 一步读取响应体:")
+        page.intercept.start(handler=None, phases=["beforeRequestSent"], collect_response=True)
         page.run_js(
             """
             fetch(arguments[0], {
@@ -302,6 +295,9 @@ def test_advanced_network():
                 f"   wait捕获POST: {queued_post.method} {queued_post.url} body={queued_post.body}"
             )
             queued_post.continue_request()
+            # 无需手动编排 DataCollector，直接读取响应体
+            resp_body = queued_post.response_body
+            print(f"   response_body: {resp_body}")
         else:
             print("   ⚠ 未捕获到 POST 请求")
         page.wait(0.5)

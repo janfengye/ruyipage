@@ -3,10 +3,11 @@
 示例11: 网络拦截（本地可重复版）
 
 测试覆盖：
-1) beforeRequestSent + mock 响应
+1) beforeRequestSent + mock 响应（dict headers）
 2) beforeRequestSent + fail 请求
-3) beforeRequestSent + 修改请求头并继续
+3) beforeRequestSent + 修改请求头并继续（dict headers）
 4) 无 handler 队列模式 wait()
+5) responseStarted 阶段读取 response_status / response_headers
 
 说明：
 - 本示例全部使用本地 TestServer，避免外网波动导致结果不稳定。
@@ -49,7 +50,7 @@ def test_network_intercept():
         page.wait(0.5)
 
         # ==========================================================
-        # 1) mock 响应
+        # 1) mock 响应（使用简洁的 dict headers）
         # ==========================================================
         print("\n1. 拦截并 Mock 本地 API:")
 
@@ -58,19 +59,14 @@ def test_network_intercept():
                 print(f"   拦截到请求: {req.method} {req.url}")
                 # 注意：mock 需要带上 CORS 头，不然浏览器会把跨域响应拦掉，
                 # fetch 侧会看到 NetworkError。
+                # headers 支持 dict 格式，自动转换为 BiDi 格式。
                 req.mock(
                     '{"status":"ok","data":{"message":"mocked-by-interceptor"}}',
                     status_code=200,
-                    headers=[
-                        {
-                            "name": "content-type",
-                            "value": {"type": "string", "value": "application/json"},
-                        },
-                        {
-                            "name": "access-control-allow-origin",
-                            "value": {"type": "string", "value": "*"},
-                        },
-                    ],
+                    headers={
+                        "content-type": "application/json",
+                        "access-control-allow-origin": "*",
+                    },
                 )
                 print("   ✓ 已返回 Mock 响应")
             else:
@@ -112,24 +108,18 @@ def test_network_intercept():
         page.intercept.stop()
 
         # ==========================================================
-        # 3) 修改请求头并继续
+        # 3) 修改请求头并继续（使用简洁的 dict headers）
         # ==========================================================
         print("\n3. 修改请求头并继续:")
 
         def header_handler(req):
             if "/api/headers" in req.url:
-                # continue_request(headers=...) 会覆盖本次请求头。
+                # headers 支持 dict 格式，比 BiDi 原始格式简洁得多。
                 req.continue_request(
-                    headers=[
-                        {
-                            "name": "X-Ruyi-Demo",
-                            "value": {"type": "string", "value": "yes"},
-                        },
-                        {
-                            "name": "User-Agent",
-                            "value": {"type": "string", "value": "RuyiPage/Example11"},
-                        },
-                    ]
+                    headers={
+                        "X-Ruyi-Demo": "yes",
+                        "User-Agent": "RuyiPage/Example11",
+                    }
                 )
                 print("   ✓ 已注入自定义请求头")
             else:
@@ -172,6 +162,40 @@ def test_network_intercept():
             req.continue_request()
         else:
             print("   ⚠ 未在超时内捕获请求")
+        page.intercept.stop()
+
+        # ==========================================================
+        # 5) responseStarted 阶段读取响应信息 + 响应体
+        # ==========================================================
+        print("\n5. responseStarted 阶段读取 response_status / response_headers / response_body:")
+
+        captured_body = []
+
+        def response_handler(req):
+            if "/api/data" in req.url:
+                print(f"   拦截到响应: status={req.response_status}")
+                if req.response_headers:
+                    ct = req.response_headers.get("content-type", "未知")
+                    print(f"   响应 content-type: {ct}")
+                # 放行响应，不做修改
+                req.continue_response()
+                # start_responses 默认 collect_response=True，
+                # continue_response 后可直接读取响应体
+                body = req.response_body
+                captured_body.append(body)
+                print(f"   响应体: {body}")
+            else:
+                req.continue_response()
+
+        page.intercept.start_responses(response_handler)
+        result = page.run_js(
+            """
+            return fetch(arguments[0]).then(r => r.status + ':' + r.statusText).catch(e => String(e));
+            """,
+            server.get_url("/api/data"),
+            as_expr=False,
+        )
+        print(f"   前端看到: {result}")
         page.intercept.stop()
 
         print("\n" + "=" * 60)

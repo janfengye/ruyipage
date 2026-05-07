@@ -5,7 +5,11 @@
 import io
 import os
 import sys
+from pathlib import Path
 from typing import Dict, List
+
+
+BASE_DIR = Path(__file__).resolve().parent
 
 if sys.platform == "win32":
     sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding="utf-8")
@@ -34,7 +38,7 @@ def main() -> None:
 
     page = FirefoxPage()
     results: List[Dict[str, str]] = []
-    test_file = os.path.join(os.path.dirname(__file__), "test_file_dialog.html")
+    test_file = BASE_DIR / "test_file_dialog.html"
 
     try:
         # 1. log.entryAdded
@@ -59,7 +63,11 @@ def main() -> None:
         error_entry = next((e for e in entries if e.level == "error"), None)
         warn_entry = next((e for e in entries if e.level == "warn"), None)
         table_entry = next(
-            (e for e in entries if "Alice" in (e.text or "") or "Bob" in (e.text or "")),
+            (
+                e
+                for e in entries
+                if "Alice" in (e.text or "") or "Bob" in (e.text or "")
+            ),
             None,
         )
 
@@ -86,9 +94,16 @@ def main() -> None:
             add_result(results, "log.entryAdded warn", "失败", "未观察到 warn 日志事件")
 
         if table_entry:
-            add_result(results, "log.entryAdded table", "成功", (table_entry.text or "")[:120])
+            add_result(
+                results, "log.entryAdded table", "成功", (table_entry.text or "")[:120]
+            )
         else:
-            add_result(results, "log.entryAdded table", "跳过", "当前 console.table 输出未稳定映射到 text")
+            add_result(
+                results,
+                "log.entryAdded table",
+                "跳过",
+                "当前 console.table 输出未稳定映射到 text",
+            )
 
         add_result(
             results,
@@ -97,7 +112,6 @@ def main() -> None:
             f"日志数量: {len(entries)}",
         )
         page.console.stop()
-
 
         # 2. input.fileDialogOpened
         html_content = """
@@ -115,7 +129,7 @@ def main() -> None:
         with open(test_file, "w", encoding="utf-8") as f:
             f.write(html_content)
 
-        page.get(f"file:///{test_file.replace(os.sep, '/')}")
+        page.get(test_file.resolve().as_uri())
         add_result(results, "文件测试页加载", "成功", "本地 file dialog 页面已加载")
 
         if page.events.start(["input.fileDialogOpened"], contexts=[page.tab_id]):
@@ -178,8 +192,8 @@ def main() -> None:
         except Exception:
             pass
         try:
-            if os.path.exists(test_file):
-                os.remove(test_file)
+            if test_file.exists():
+                test_file.unlink()
         except Exception:
             pass
         try:

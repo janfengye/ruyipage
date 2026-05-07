@@ -6,14 +6,15 @@
 
 [简体中文](./README.md) | [English](./README_EN.md)
 
-> Built for **AI analysis** and **data capture** workflows, with the ability to intercept arbitrary request and response packets.
+> Built for **AI analysis** and **data capture** workflows, with the ability to intercept arbitrary request and response packets. Ships with a battle-tested anti-detection Firefox fingerprint browser engine for Windows and Linux.
 >
-> 专用于 **AI 分析** 和 **数据采集** 场景，可拦截任意请求响应包。
+> 专用于 **AI 分析** 和 **数据采集** 场景，可拦截任意请求响应包。自带好用的过检测 Win/Linux 火狐指纹浏览器内核。
 
 > **A next-generation automation framework**
 >
 > - Comes with a **detection-resistant Firefox kernel**
 > - A large amount of native **`isTrusted`** actions, with **no automation detection surface**
+> - Supports adding **`ruyi: true`** to many JS event constructors so the **`isTrusted`** behavior of `Event`, `InputEvent`, `MouseEvent`, `KeyboardEvent`, and more can stay closer to real interaction
 > - Supports **direct automated takeover** of fingerprint browsers such as **ADS**
 > - Built on **Firefox + WebDriver BiDi**
 > - Better suited for **high-risk scenarios**
@@ -24,9 +25,47 @@
 [![GitHub stars](https://img.shields.io/github/stars/LoseNine/ruyipage?style=social)](https://github.com/LoseNine/ruyipage/stargazers)
 [![Downloads](https://static.pepy.tech/badge/ruyipage)](https://pepy.tech/project/ruyipage)
 
-Docs: <https://0xshoulderlab.site/automation>
+## Buy Me a Coffee
 
-AI automation analysis runtime skill: <https://github.com/d0ublecl1ck/ruyipage-dev>. Thanks to `d0ublecl1ck` for creating this skill.
+If this project helps you, you are welcome to buy me a coffee and support continued work on `ruyiPage`.
+
+<table>
+  <tr>
+    <td align="center">
+      <b>Official Account</b><br>
+      <img src="images/gzh.jpg" width="220" alt="Official account QR code" />
+    </td>
+    <td align="center">
+      <b>QQ Group</b><br>
+      <img src="images/qq.jpg" width="220" alt="QQ group QR code" />
+    </td>
+    <td align="center">
+      <b>Contact Me / WeChat</b><br>
+      <img src="images/weixin.jpg" width="220" alt="Personal WeChat QR code" />
+    </td>
+    <td align="center">
+      <b>Buy Me a Coffee</b><br>
+      <img src="images/weixingoot.jpg" width="220" alt="Donation QR code" />
+    </td>
+  </tr>
+</table>
+
+---
+
+## Companion Projects
+
+If you plan to use `ruyiPage` for AI-driven automation analysis, advanced web data capture, or high-risk browser workflows, start with these companion resources:
+
+- 📘 **Documentation / Automation Docs**
+  A central place for `ruyiPage` automation guidance, integration notes, and supporting project documentation: <https://0xshoulderlab.site/automation>
+- 🦊 **Firefox fingerprint browser project**
+  Intended for cases where you need a Firefox fingerprint environment, browser takeover, or more realistic automation behavior alongside `ruyiPage`: <https://github.com/LoseNine/firefox-fingerprintBrowser>
+- 🟨 **JavaScript implementation: ruyipage-js**
+  A companion implementation for the JavaScript / Node.js ecosystem, useful when you want to bring the `ruyiPage` approach and capabilities into JS-based projects: <https://github.com/GanFish404/ruyipage-js>
+- 🐹 **Go implementation: ruyipage-go**
+  A community-maintained Go implementation for teams that want to integrate Firefox automation capabilities into Go projects. Thanks to @pll177 for the implementation and maintenance: <https://github.com/pll177/ruyipage-go>
+- 🖥️ **Desktop GUI manager: ruyiBrowser-GUI**
+  A graphical Firefox fingerprint browser management tool built with Electron + Vue3. Create, manage, and launch multiple isolated fingerprint environments without the command line. Thanks to @jacklaigougou for the implementation and maintenance: <https://github.com/jacklaigougou/ruyiBrowser-GUI>
 
 ---
 
@@ -68,6 +107,14 @@ pip install ruyiPage --upgrade
 
 If this is your first installation, the command above also works as the default way to install the latest version.
 
+To enable **async (async/await) support**:
+
+```bash
+pip install ruyiPage[async] --upgrade
+```
+
+This additionally installs `greenlet` and `websockets`. The synchronous API remains completely unaffected.
+
 If you run the project from source, or distribute the source tree to students, install the project dependencies as well:
 
 ```bash
@@ -91,6 +138,61 @@ print(page.title)
 page.quit()
 ```
 
+### Async (async/await) launch
+
+```python
+import asyncio
+from ruyipage.aio import launch
+
+async def main():
+    page = await launch()
+    await page.get("https://www.example.com")
+    title = await page.get_title()
+    print(title)
+
+    el = await page.ele("#search")
+    await el.click_self()
+    await el.input("hello async")
+
+    await page.quit()
+
+asyncio.run(main())
+```
+
+The async API mirrors the synchronous API exactly -- just add `async/await`.
+Properties (e.g. `page.title`) become async methods (e.g. `await page.get_title()`).
+Full examples: `quickstart_bing_search_async.py` and `quickstart_cloudflare_async.py` in the project root.
+
+### JS Event `isTrusted` Comparison
+
+`ruyiPage` does not only provide native clicks, typing, hover, and other high-`isTrusted` actions. It also supports adding `ruyi: true` to many JS event constructors so the resulting `isTrusted` behavior stays closer to real user interaction.
+
+For example:
+
+```javascript
+new Event('change', { bubbles: true, ruyi: true })
+new InputEvent('input', { bubbles: true, data: 'A', inputType: 'insertText', ruyi: true })
+new MouseEvent('click', { bubbles: true, clientX: 12, clientY: 24, ruyi: true })
+new KeyboardEvent('keydown', { bubbles: true, key: 'Enter', code: 'Enter', ruyi: true })
+```
+
+You can run the bundled showcase directly:
+
+```bash
+python examples/45_js_setter_untrusted_input.py
+```
+
+This example compares normal JS events with `ruyi: true` events and checks `isTrusted` across:
+
+- `Event`
+- `InputEvent`
+- `KeyboardEvent`
+- `MouseEvent`
+- `FocusEvent`
+- `CustomEvent`
+- `PointerEvent`
+- `WheelEvent`
+
 ### Specify Firefox path and userdir
 
 ```python
@@ -106,6 +208,11 @@ print(page.title)
 page.quit()
 ```
 
+Where:
+
+- **`browser_path`**: Path to the Firefox executable. Useful when Firefox is not in the default install directory, you have multiple versions, or you use a portable build.
+- **`user_dir`**: Firefox profile / user directory. Useful when you want to reuse login state, keep cookies / local storage, or reuse extensions and preferences. If not set, `ruyiPage` creates a temporary profile automatically, suitable for one-off testing — it is usually cleaned up after closing.
+
 ### Beginner-friendly `launch`
 
 ```python
@@ -115,6 +222,7 @@ page = launch(
     browser_path=r"D:\Firefox\firefox.exe",
     user_dir=r"D:\ruyipage_userdir",
     headless=False,
+    close_on_exit=True,
     port=9222,
 )
 
@@ -122,6 +230,76 @@ page.get("https://www.example.com")
 print(page.title)
 page.quit()
 ```
+
+Where:
+
+- `close_on_exit=True` means the browser started by `ruyiPage` is closed automatically when the Python process exits.
+- If you want to keep the browser window open for manual follow-up after the script exits, set `close_on_exit=False`.
+- If you are attaching to an existing browser through `attach()` or `existing_only(True)`, Python exit only disconnects the session even when `close_on_exit=True`; it does not close the external browser process.
+
+### Common `FirefoxOptions` API
+
+If you want more explicit control over browser startup behavior, use `FirefoxOptions` directly.
+
+Start with a complete example that covers the most common options:
+
+```python
+from ruyipage import FirefoxOptions, FirefoxPage
+
+opts = FirefoxOptions()
+opts.set_browser_path(r"D:\Firefox\firefox.exe")
+opts.set_user_dir(r"D:\ruyipage_userdir")
+opts.set_port(9222)
+opts.set_proxy("http://127.0.0.1:7890")
+opts.set_window_size(1440, 900)
+opts.headless(False)
+opts.private_mode(False)
+opts.close_on_exit(True)
+
+page = FirefoxPage(opts)
+page.get("https://www.example.com")
+print(page.title)
+page.quit()
+```
+
+The table below summarizes the `opt` options that users can call directly today.
+
+| Method | What it does | Common use case |
+| --- | --- | --- |
+| `set_browser_path(path)` | Set the Firefox executable path | Firefox is not in the default location, you use a portable build, or multiple Firefox versions are installed |
+| `set_address(address)` | Set the debug address as `host:port` | You already know the exact debug address and want to connect to that instance |
+| `set_port(port)` | Set the remote debugging port | Multiple browser instances on one machine, or avoiding port conflicts |
+| `set_auto_port(True)` | Automatically find an available port | You do not want to manage ports manually, especially in batch scripts |
+| `existing_only(True)` | Attach to an existing browser without launching a new one | Connecting to a manually started Firefox, ADS, or a fingerprint browser |
+| `set_retry(times, interval)` | Configure connection retries and retry interval | Slow startup, remote instability, or delayed debug-port readiness |
+| `set_profile(path)` | Set the Firefox profile directory | Reusing login state, cookies, extensions, and preferences long-term |
+| `set_user_dir(path)` | Beginner-friendly alias for `set_profile()` | When `user_dir` is easier to understand in tutorials and team scripts |
+| `close_on_exit(True/False)` | Control whether Python exit closes the browser | Default `True` for script-style cleanup; use `False` to leave the browser open for manual follow-up |
+| `private_mode(True/False)` | Enable native Firefox private browsing mode | You want a private session rather than a normal browsing window |
+| `headless(True/False)` | Enable or disable headless mode | Servers, background jobs, or flows that do not need a visible UI |
+| `set_argument(arg, value=None)` | Add a custom startup argument | Passing through native Firefox startup flags |
+| `remove_argument(arg)` | Remove a previously added startup argument | Reusing an options object and undoing a startup flag |
+| `set_pref(key, value)` | Write Firefox preferences | Adjusting `about:config`, proxy behavior, download behavior, and other browser prefs |
+| `set_window_size(width, height)` | Set the startup window size | Controlling initial viewport/layout behavior for target sites |
+| `set_proxy(proxy)` | Set an HTTP / HTTPS / SOCKS proxy | Proxy routing, IP switching, geo-specific access |
+| `set_download_path(path)` | Set the default download directory | Saving downloaded files into a fixed location |
+| `set_load_mode(mode)` | Control page-load waiting strategy | Balancing speed and stability |
+| `set_timeouts(base, page_load, script)` | Set element lookup, page load, and script timeouts | Slow pages, slow endpoints, or long-running scripts |
+| `set_user_prompt_handler(handler)` | Set default handling for alert / confirm / prompt | Auto-accepting or dismissing dialogs so flows do not block |
+| `set_fpfile(path)` | Pass a fingerprint config file through `--fpfile` | Using a Firefox build or fingerprint browser that supports this argument |
+| `enable_xpath_picker(True/False)` | Enable the on-page XPath picker panel | Capturing elements, viewing XPath, and generating locator code |
+| `enable_action_visual(True/False)` | Enable action visualization for debugging | Inspecting human-like cursor movement, click trails, and key input |
+| `quick_start(...)` | Apply a beginner-friendly startup preset in one call | Small scripts, demos, and quick-start usage |
+
+Notes:
+
+- `close_on_exit(True)` is enabled by default, but it only auto-closes browsers started by `ruyiPage` itself.
+- If you attach to an external browser through `existing_only(True)` or `attach()`, Python exit only disconnects the session and does not close the external browser process.
+- If you do not set `user_dir` / `profile`, `ruyiPage` creates a temporary profile automatically. That is convenient for one-off scripts.
+- `set_fpfile()` currently mainly passes the path via `--fpfile=...` and reads proxy-auth fields from that file. It should not be described as a universal auto-fingerprint configuration entry.
+- `quick_start()` is a convenience preset, not a replacement for every `FirefoxOptions` method. When you need precise control, combine the individual `FirefoxOptions` methods directly.
+
+If you only want the fastest way to launch, use `launch()`. If you want startup behavior to be more explicit and easier to hand off to end users, prefer `FirefoxOptions`.
 
 ### Enable Private Mode
 
@@ -147,7 +325,7 @@ Notes:
 - `private=True` / `opts.private_mode(True)` adds the `-private` startup argument for Firefox
 - This is different from the default temporary `profile`
 - If you only want a one-off session without reusing old data, you can also simply omit `user_dir`
-- Full example: `quickstart_private_mode.py`
+- Full example: see the `examples/` directory
 
 ### Enable XPath Picker
 
@@ -195,6 +373,91 @@ This showcase page covers:
 - open shadow roots
 - complex text nodes and SVG nodes
 
+### Mouse Visual Debugging
+
+`ruyiPage` now supports an `action_visual=True` mouse visual debugging mode, which is useful when you need to inspect where the cursor actually moved and what target was really clicked during automation.
+
+When enabled, it shows:
+
+- BiDi mouse movement trails
+- Click position highlight / flash feedback
+- Current mouse coordinates
+- Highlight of the current click target element
+- Mouse-side feedback for built-in JS click / JS input paths
+
+This debug mode is intentionally focused on **mouse behavior**, mainly covering:
+
+- `page.actions.move_to()` / `move()` / `human_move()`
+- `page.actions.click()` / `double_click()` / `human_click()`
+- `page.actions.drag_to()` / `hold()` / `release()`
+- `ele.click.left()` / `click_self()` / `double_click()`
+- `ele.click.by_js()`
+- Mouse positioning feedback for `ele.input(..., by_js=True)`
+
+The simplest way to launch it:
+
+```python
+from ruyipage import launch
+
+page = launch(action_visual=True, headless=False)
+```
+
+If you prefer enabling it through `options`, you can do it like this:
+
+```python
+from ruyipage import FirefoxOptions, FirefoxPage
+
+opts = FirefoxOptions()
+opts.enable_action_visual(True)
+opts.headless(False)
+
+page = FirefoxPage(opts)
+page.get('https://www.example.com')
+```
+
+To view the full local demo directly, run:
+
+```bash
+python examples/42_2_action_visual_showcase.py
+```
+
+If you specifically want to demonstrate `human_move()` / `human_click()` and visually compare
+the two human cursor algorithms (`bezier` / `windmouse`), run:
+
+```bash
+python examples/46_human_behavior_showcase.py
+```
+
+This example will:
+
+- open a dedicated local HTML showcase page
+- enable `action_visual=True` so mouse trails are visible on screen
+- demonstrate both `bezier` and `windmouse` cursor movement
+- also show the effect of `human_type()`
+
+Related API:
+
+```python
+opts.set_human_algorithm("windmouse")
+
+page.actions.human_move(ele, algorithm="bezier", style="arc").perform()
+page.actions.human_move(ele, algorithm="windmouse").perform()
+page.actions.human_click(ele, algorithm="windmouse").perform()
+```
+
+Notes:
+
+- `algorithm` can be `"bezier"` or `"windmouse"`
+- `style` only applies to `bezier`
+- if `algorithm` is omitted, `FirefoxOptions.set_human_algorithm()` provides the default
+
+That example uses a dedicated local mouse-only demo page and showcases:
+
+- BiDi mouse trails
+- Click position and target highlighting
+- Drag trails
+- Visual feedback for JS click
+
 ### Attach to an Already-Open Browser
 
 If Firefox is already open manually, or a fingerprint browser is started first, `ruyiPage` can attach to the existing instance directly.
@@ -227,92 +490,33 @@ Useful when:
 - you are using ADS / FlowerBrowser and the real debugging port changes every run
 - you do not want to maintain a port range manually and prefer process-feature-based discovery
 
-### What `browser_path` and `user_dir` Mean
-
-#### `browser_path`
-
-The path to the Firefox executable.
-
-Use it when:
-
-- Firefox is not installed in the default location
-- you have multiple Firefox versions
-- you are using a portable Firefox build
-
-#### `user_dir`
-
-This is the Firefox profile / user directory.
-
-Use it when:
-
-- you want to reuse login state
-- you want to keep cookies / local storage
-- you want to reuse extensions, certificates, or preferences
-
-If you do not set it:
-
-- `ruyiPage` will create a temporary profile automatically
-- this is suitable for one-off testing
-- it is usually cleaned up after closing
-
 ---
 
-## Buy Me a Coffee
-
-If this project helps you, you are welcome to buy me a coffee and support continued work on `ruyiPage`.
-
-<table>
-  <tr>
-    <td align="center">
-      <b>Official Account</b><br>
-      <img src="images/gzh.jpg" width="220" alt="Official account QR code" />
-    </td>
-    <td align="center">
-      <b>QQ Group</b><br>
-      <img src="images/qq.jpg" width="220" alt="QQ group QR code" />
-    </td>
-    <td align="center">
-      <b>Contact Me / WeChat</b><br>
-      <img src="images/weixin.jpg" width="220" alt="Personal WeChat QR code" />
-    </td>
-    <td align="center">
-      <b>Buy Me a Coffee</b><br>
-      <img src="images/weixingoot.jpg" width="220" alt="Donation QR code" />
-    </td>
-  </tr>
-</table>
-
----
-
-## Project Positioning
+## Project Positioning and Technical Approach
 
 `ruyiPage` is a Python library focused on **Firefox browser automation**. Its underlying protocol comes from:
 
 - WebDriver BiDi: https://w3c.github.io/webdriver-bidi/
 
-If you are not looking for just another CDP-based automation library, but instead care about:
-
-- **A next-generation Firefox automation framework**
-- **BiDi rather than CDP**
-- **Native actions that preserve a large amount of `isTrusted` behavior**
-- **Built-in human-like interaction capability for high-risk pages**
-- **Support for interception, mocking, collectors, and network control**
-- **Support for different user contexts in one browser, isolating cookies and storage across tabs**
-- **A Firefox automation stack that is easier to maintain long-term**
-
-then `ruyiPage` is built for that direction.
-
-You can think of it as:
-
 > A high-level automation framework for **Firefox**, with **WebDriver BiDi as the foundation** and beginner-friendly APIs on top.
 
-It especially emphasizes four things:
+Unlike many automation libraries that rely heavily on CDP (Chrome DevTools Protocol), `ruyiPage`:
 
-- **No CDP dependency**, which naturally avoids the CDP exposure surface
-- **Native action chains first**, to keep input, drag, click, and similar behavior closer to real `isTrusted` browser interaction
+- Uses **Firefox** as the core browser and **WebDriver BiDi** as the core protocol — **no CDP dependency**
+- Naturally avoids the CDP exposure surface and aligns with the W3C next-generation browser automation direction
+- **Native action chains first**, to keep input, drag, click, and similar behavior closer to real `isTrusted` interaction
 - **Built-in human-like interaction support**, better suited to high-risk pages
+- **Support for interception, mocking, collectors, and network control**
 - **Built-in user context isolation**, suitable for multi-account and multi-session flows in one browser
 - **High-level APIs that are easy to get started with**, which also helps teams keep a consistent code style
+
+### High-Risk Scenario Recommendation
+
+If your target site is highly sensitive to automation, the Firefox kernel solution provided by this project is the recommended first choice, or use any Firefox fingerprint browser:
+
+- https://github.com/LoseNine/firefox-fingerprintBrowser
+
+Recommended workflow: 1) Use the Firefox kernel solution first → 2) Then use `ruyiPage` for automation control — that combination is generally more stable.
 
 ---
 
@@ -340,60 +544,6 @@ Before diving into the details, this table gives a quick overview of what `ruyiP
 | Emulation | `page.emulation` | UA, viewport, screen, orientation, JS toggle |
 | WebExtension | `page.extensions` | Install unpacked extensions, install xpi, uninstall |
 | Local storage | `page.local_storage` / `page.session_storage` | Read and write local/session storage |
-
----
-
-## About Firefox Kernel and Fingerprint Browsers
-
-If your target site is highly sensitive to automation, it is better to start from the browser-level solution directly.
-
-### Recommended Approach
-
-The Firefox kernel solution provided by this project is the recommended first choice.
-
-At the same time, `ruyiPage` can also work with any Firefox fingerprint browser.
-
-For example:
-
-- https://github.com/LoseNine/firefox-fingerprintBrowser
-
-The value of this kind of browser/kernel is:
-
-- it customizes Firefox from the lower browser layer
-- it is not just front-end level masking
-- it works better together with `ruyiPage` on stronger anti-bot sites
-
-### Conclusion
-
-The role of `ruyiPage` is:
-
-- to provide high-level Firefox + BiDi automation capabilities
-- to avoid the CDP detection surface
-
-But if you are visiting high-risk sites, it is still recommended to:
-
-1. use the Firefox kernel solution recommended by this project first
-2. then use `ruyiPage` to automate it
-
-That combination is generally more stable.
-
----
-
-## Why Firefox + BiDi
-
-Many automation frameworks rely heavily on CDP (Chrome DevTools Protocol).
-
-`ruyiPage` takes a different path:
-
-- using **Firefox** as the core browser
-- using **WebDriver BiDi** as the core protocol
-- avoiding CDP entirely
-
-That means:
-
-- no traditional CDP automation exposure surface
-- closer alignment with the W3C next-generation browser automation direction
-- a better fit for Firefox-focused automation, input simulation, event listening, and network control
 
 ---
 
@@ -512,37 +662,7 @@ Suitable for:
 - passing fingerprint files, locale, headers, and screen parameters together
 - directly validating fingerprint output on sites such as `browserscan`
 
-### 4. Attach to an Already-Open Firefox Fingerprint Browser
-
-File: `examples/39_attach_exist_browser.py`
-
-It will:
-
-- remind you to start Firefox or a Firefox fingerprint browser manually first
-- automatically detect and attach based on Firefox / ADS / FlowerBrowser process features
-- operate the live browser instance directly after takeover
-
-Core pattern:
-
-```python
-from ruyipage import auto_attach_exist_browser_by_process
-
-page = auto_attach_exist_browser_by_process(
-    latest_tab=True,
-)
-
-print(page.browser.address)
-print(page.title)
-print(page.url)
-```
-
-Suitable for:
-
-- an already-open ADS / FlowerBrowser style Firefox fingerprint browser
-- browser backends that rewrite `--remote-debugging-port=9222` to a random port
-- automatically discovering the real port from process features and attaching to the running instance
-
-### 5. HTTP Proxy Auth Example
+### 4. HTTP Proxy Auth Example
 
 If you are using this project's own Firefox kernel, the kernel already supports reading HTTP proxy credentials from `fpfile` automatically.
 
@@ -987,7 +1107,102 @@ For example:
 
 ## 8. Network Capabilities
 
-High-level entry: `page.network`
+High-level entry: `page.intercept` (interception), `page.listen` (monitoring), `page.network` (configuration)
+
+### Request Interception
+
+Intercept the `beforeRequestSent` phase to modify, mock, or block requests:
+
+```python
+# Callback mode: intercept and mock a response
+def handler(req):
+    if '/api/data' in req.url:
+        req.mock(
+            '{"status":"ok","data":"mocked"}',
+            headers={"content-type": "application/json",
+                     "access-control-allow-origin": "*"},
+        )
+    else:
+        req.continue_request()
+
+page.intercept.start_requests(handler)
+page.get("https://example.com")
+page.intercept.stop()
+```
+
+```python
+# Modify request headers (headers accept a simple dict)
+def handler(req):
+    req.continue_request(headers={
+        "X-Token": "abc123",
+        "User-Agent": "RuyiPage/1.0",
+    })
+
+page.intercept.start_requests(handler)
+```
+
+```python
+# Block requests
+def handler(req):
+    if req.url.endswith(('.png', '.jpg', '.gif')):
+        req.fail()
+    else:
+        req.continue_request()
+
+page.intercept.start_requests(handler)
+```
+
+```python
+# Queue mode: handle manually
+page.intercept.start_requests()
+# ... trigger network requests ...
+req = page.intercept.wait(timeout=5)
+print(req.method, req.url, req.body)
+req.continue_request()
+page.intercept.stop()
+```
+
+### Response Interception
+
+Intercept the `responseStarted` phase to read or modify response info:
+
+```python
+# Read the original response status, headers and body
+def handler(req):
+    print(f"Status: {req.response_status}")
+    print(f"Content-Type: {req.response_headers.get('content-type')}")
+    req.continue_response()
+    # start_responses enables collect_response=True by default,
+    # so response_body is available right after continue_response
+    print(f"Body: {req.response_body}")
+
+page.intercept.start_responses(handler)
+```
+
+```python
+# Modify the response status code
+def handler(req):
+    if '/api' in req.url:
+        req.continue_response(status_code=200, reason_phrase="OK")
+    else:
+        req.continue_response()
+
+page.intercept.start_responses(handler)
+```
+
+### Read Response Body in One Step
+
+With `collect_response=True`, use `req.response_body` to read the response body directly — no manual DataCollector needed:
+
+```python
+page.intercept.start_requests(collect_response=True)
+# ... trigger network requests ...
+req = page.intercept.wait(timeout=5)
+req.continue_request()
+body = req.response_body  # auto-waits for response + decodes
+print(body)
+page.intercept.stop()     # auto-cleans internal collector
+```
 
 ### Set extra headers
 
@@ -1181,12 +1396,6 @@ page.run_js("prompt('请输入姓名')", as_expr=False)
 page.clear_prompt_handler()
 ```
 
-```python
-page.set_prompt_handler(prompt="ignore", prompt_text="张三")
-page.run_js("prompt('请输入姓名')", as_expr=False)
-page.clear_prompt_handler()
-```
-
 ---
 
 ## 13. Emulation
@@ -1288,6 +1497,7 @@ Suggested order:
 - `36_native_bidi_select.py`
 - `39_attach_exist_browser.py` auto-detect an attachable instance, then take over the already-open Firefox / fingerprint browser
 - `42_xpath_picker_complex_showcase.py` starts XPath picker and opens a showcase page with complex nodes, shadow roots, and nested iframes
+- `46_human_behavior_showcase.py` demonstrates both bezier and windmouse human cursor algorithms with action visualization enabled
 
 ---
 
@@ -1317,19 +1527,6 @@ This is also the design source for many high-level APIs in this project, such as
    <img alt="Star History Chart" src="https://api.star-history.com/chart?repos=LoseNine/ruyipage&type=timeline&legend=top-left" />
  </picture>
 </a>
-
----
-
-## Final Notes
-
-The core direction of `ruyiPage` is not to expose every low-level BiDi command in raw form, but to provide:
-
-- a Firefox automation experience that feels friendly enough
-- an interface that is intuitive enough for beginners
-- structure that works well with editor navigation
-- enough room for advanced users to access BiDi capabilities when needed
-
-If you mainly use **Firefox** for automation, want to avoid the CDP detection surface as much as possible, and also want APIs that are easier to understand than writing raw protocol code directly, `ruyiPage` is built for that path.
 
 ---
 

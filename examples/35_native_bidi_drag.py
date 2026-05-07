@@ -4,7 +4,11 @@
 import io
 import os
 import sys
+from pathlib import Path
 from typing import Dict, List
+
+
+BASE_DIR = Path(__file__).resolve().parent
 
 
 if sys.platform == "win32":
@@ -39,10 +43,8 @@ def main() -> None:
     results: List[Dict[str, str]] = []
 
     try:
-        test_page = os.path.join(
-            os.path.dirname(__file__), "test_pages", "native_bidi_drag_test.html"
-        )
-        test_url = "file:///" + os.path.abspath(test_page).replace("\\", "/")
+        test_page = BASE_DIR / "test_pages" / "native_bidi_drag_test.html"
+        test_url = test_page.resolve().as_uri()
         page.get(test_url)
         page.wait(0.8)
         add_result(results, "测试页加载", "成功", test_url)

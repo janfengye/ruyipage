@@ -16,6 +16,11 @@ import math
 import time
 
 from .._functions.keys import Keys
+from .._functions.sleep import sleep as _sleep
+
+import logging
+
+logger = logging.getLogger('ruyipage')
 
 
 class Actions(object):
@@ -77,7 +82,8 @@ class Actions(object):
                         - FirefoxElement: 移动到元素中心
                         - dict {'x': int, 'y': int}: 移动到指定坐标
                         - tuple/list (x, y): 移动到指定坐标
-                        - None: 使用当前鼠标位置
+                        - None: 仅传 offset 时按视口绝对坐标 (offset_x, offset_y)；
+                                offset 也为 0 时保持当前鼠标位置不动。
             offset_x:   在目标位置基础上的 X 偏移量 (像素)。默认 0。
             offset_y:   在目标位置基础上的 Y 偏移量 (像素)。默认 0。
             duration:   移动动画时长 (毫秒)。默认 100。
@@ -87,7 +93,12 @@ class Actions(object):
         Returns:
             self: 支持链式调用。
         """
-        x, y = self._resolve_position(ele_or_loc)
+        # 不传 ele_or_loc 但显式给了 offset 时，按视口绝对坐标处理，
+        # 避免 "offset 累加到上一次指针位置" 造成的越界 / 错位 bug。
+        if ele_or_loc is None and (offset_x or offset_y):
+            x, y = 0, 0
+        else:
+            x, y = self._resolve_position(ele_or_loc)
         x += offset_x
         y += offset_y
         action = {"type": "pointerMove", "x": int(x), "y": int(y), "duration": duration}
@@ -452,6 +463,10 @@ class Actions(object):
         """
         actions = []
 
+        # 保存副本供可视化使用
+        pointer_copy = self._pointer_actions[:]
+        key_copy = self._key_actions[:]
+
         if self._pointer_actions:
             actions.append(
                 {
@@ -472,16 +487,20 @@ class Actions(object):
                 {"type": "wheel", "id": "wheel0", "actions": self._wheel_actions[:]}
             )
 
-        if actions:
-            self._owner._driver._browser_driver.run(
-                "input.performActions",
-                {"context": self._owner._context_id, "actions": actions},
-            )
+        try:
+            if actions:
+                self._owner._driver._browser_driver.run(
+                    "input.performActions",
+                    {"context": self._owner._context_id, "actions": actions},
+                )
+        finally:
+            # 无论成功或失败都清空队列，避免残留动作污染下一次 perform()
+            self._pointer_actions.clear()
+            self._key_actions.clear()
+            self._wheel_actions.clear()
 
-        # 清空动作队列
-        self._pointer_actions.clear()
-        self._key_actions.clear()
-        self._wheel_actions.clear()
+        # 可视化渲染（执行后注入）
+        self._send_visual_data(pointer_copy, key_copy)
 
         return self
 
@@ -503,11 +522,16 @@ class Actions(object):
     #  拟人化操作
     # ════════════════════════════════════════════════════════════════
 
-    def human_move(self, ele_or_loc, style=None):
+    def human_move(self, ele_or_loc, style=None, algorithm=None):
         """拟人化鼠标移动。
 
-        使用 Bézier 曲线 + 抖动算法生成自然的鼠标运动轨迹，
-        支持多种路径风格，模拟真人操作避免反自动化检测。
+        支持两套拟人轨迹算法：
+
+        - ``bezier``：当前默认算法，路径更平滑，支持 ``style`` 变体
+        - ``windmouse``：模拟风力 + 重力拖拽的轨迹，路径更飘逸
+
+        这两个算法最终都会生成一组 ``pointerMove`` 序列，
+        因此对现有动作链和可视化调试保持兼容。
 
         Args:
             ele_or_loc: 目标位置。支持元素、坐标 dict、坐标 tuple。
@@ -517,6 +541,9 @@ class Actions(object):
                         - 'line_then_arc': 先直线后弧线
                         - 'line_overshoot_arc_back': 超越目标后弧线回拉
                         - None: 随机选择（默认）
+                        仅 ``algorithm='bezier'`` 时生效。
+            algorithm:  轨迹算法名。可选 ``'bezier'`` 或 ``'windmouse'``。
+                        传 ``None`` 时优先使用 ``FirefoxOptions`` 上配置的默认值。
 
         Returns:
             self: 支持链式调用。
@@ -531,10 +558,99 @@ class Actions(object):
             if not ele_or_loc.states.is_whole_in_viewport:
                 try:
                     self._owner.scroll.to_see(ele_or_loc, center=True)
-                    time.sleep(random.uniform(0.1, 0.2))
-                except Exception:
-                    pass
+                    _sleep(random.uniform(0.1, 0.2))
+                except Exception as e:
+                    logger.debug("预滚动元素到视口失败: %s", e)
 
+        algorithm = self._resolve_human_algorithm(algorithm)
+        path = self._build_human_move_path(
+            (start_x, start_y),
+            (target_x, target_y),
+            algorithm=algorithm,
+            style=style,
+        )
+
+        # 执行移动
+        for px, py in path:
+            self._pointer_actions.append(
+                {
+                    "type": "pointerMove",
+                    "x": int(px),
+                    "y": int(py),
+                    "duration": random.randint(8, 20),
+                }
+            )
+
+        # 悬停微调
+        for _ in range(random.randint(2, 4)):
+            self._pointer_actions.append(
+                {
+                    "type": "pointerMove",
+                    "x": int(target_x + random.randint(-2, 2)),
+                    "y": int(target_y + random.randint(-1, 1)),
+                    "duration": random.randint(20, 50),
+                }
+            )
+
+        # 精确落点
+        self._pointer_actions.append(
+            {
+                "type": "pointerMove",
+                "x": int(target_x),
+                "y": int(target_y),
+                "duration": random.randint(15, 30),
+            }
+        )
+
+        self.curr_x = target_x
+        self.curr_y = target_y
+        return self
+
+    def human_click(self, on_ele=None, button="left", algorithm=None, style=None):
+        """拟人化点击。
+
+        先用拟人轨迹移动到目标，再加入自然的悬停延迟后点击。
+
+        Args:
+            on_ele: 要点击的元素。为 None 时在当前位置点击。默认 None。
+            button: 鼠标按钮。'left'=左键, 'middle'=中键, 'right'=右键。
+                    默认 'left'。
+            algorithm: 轨迹算法名。可选 ``'bezier'`` 或 ``'windmouse'``。
+                       传 ``None`` 时使用 ``FirefoxOptions`` 默认值。
+            style: 点击前移动时的 Bézier 路径风格。
+                   仅 ``algorithm='bezier'`` 时生效。
+
+        Returns:
+            self: 支持链式调用。
+        """
+        if on_ele:
+            self.human_move(on_ele, style=style, algorithm=algorithm)
+
+        # 悬停随机延迟
+        self.wait(random.uniform(0.05, 0.15))
+
+        # 点击
+        button_map = {"left": 0, "middle": 1, "right": 2}
+        btn = button_map.get(button, 0)
+
+        self._pointer_actions.append({"type": "pointerDown", "button": btn})
+        self._pointer_actions.append(
+            {"type": "pause", "duration": random.randint(40, 90)}
+        )
+        self._pointer_actions.append({"type": "pointerUp", "button": btn})
+
+        return self
+
+    def _build_human_move_path(self, start, end, algorithm="bezier", style=None):
+        """按指定算法生成拟人鼠标路径点。"""
+        if algorithm == "windmouse":
+            return self._build_windmouse_path(start, end)
+        return self._build_bezier_path(start, end, style=style)
+
+    def _build_bezier_path(self, start, end, style=None):
+        """生成当前默认的 Bézier 拟人鼠标路径。"""
+        start_x, start_y = start
+        target_x, target_y = end
         dist = math.hypot(target_x - start_x, target_y - start_y) or 1.0
 
         # 近距离模式（<140px）
@@ -631,73 +747,93 @@ class Actions(object):
                 if random.random() < 0.75
                 else raw_path
             )
+        return path
 
-        # 执行移动
-        for px, py in path:
-            self._pointer_actions.append(
-                {
-                    "type": "pointerMove",
-                    "x": int(px),
-                    "y": int(py),
-                    "duration": random.randint(8, 20),
-                }
-            )
+    def _build_windmouse_path(self, start, end):
+        """生成 WindMouse 风格拟人鼠标路径。
 
-        # 悬停微调
-        for _ in range(random.randint(2, 4)):
-            self._pointer_actions.append(
-                {
-                    "type": "pointerMove",
-                    "x": int(target_x + random.randint(-2, 2)),
-                    "y": int(target_y + random.randint(-1, 1)),
-                    "duration": random.randint(20, 50),
-                }
-            )
+        该算法模拟鼠标在“风力扰动 + 向目标收敛的重力”共同作用下的移动。
+        相比平滑 Bézier，它的路径会更像真人手部微抖后的拖拽轨迹。
 
-        # 精确落点
-        self._pointer_actions.append(
-            {
-                "type": "pointerMove",
-                "x": int(target_x),
-                "y": int(target_y),
-                "duration": random.randint(15, 30),
-            }
-        )
-
-        self.curr_x = target_x
-        self.curr_y = target_y
-        return self
-
-    def human_click(self, on_ele=None, button="left"):
-        """拟人化点击。
-
-        先用拟人轨迹移动到目标，再加入自然的悬停延迟后点击。
-
-        Args:
-            on_ele: 要点击的元素。为 None 时在当前位置点击。默认 None。
-            button: 鼠标按钮。'left'=左键, 'middle'=中键, 'right'=右键。
-                    默认 'left'。
-
-        Returns:
-            self: 支持链式调用。
+        这里采用适合产品默认值的轻量实现：
+            - 不暴露复杂参数给普通用户
+            - 保证最终一定收敛到目标点
+            - 保持与现有 action_visual 的点列渲染兼容
         """
-        if on_ele:
-            self.human_move(on_ele)
+        sx, sy = start
+        ex, ey = end
+        path = []
 
-        # 悬停随机延迟
-        self.wait(random.uniform(0.05, 0.15))
+        x = float(sx)
+        y = float(sy)
+        velocity_x = 0.0
+        velocity_y = 0.0
+        wind_x = 0.0
+        wind_y = 0.0
 
-        # 点击
-        button_map = {"left": 0, "middle": 1, "right": 2}
-        btn = button_map.get(button, 0)
+        gravity = random.uniform(7.0, 10.0)
+        wind = random.uniform(2.5, 4.2)
+        max_step = random.uniform(10.0, 18.0)
+        target_area = random.uniform(9.0, 14.0)
+        damping = random.uniform(0.78, 0.88)
+        close_damping = random.uniform(0.55, 0.72)
 
-        self._pointer_actions.append({"type": "pointerDown", "button": btn})
-        self._pointer_actions.append(
-            {"type": "pause", "duration": random.randint(40, 90)}
-        )
-        self._pointer_actions.append({"type": "pointerUp", "button": btn})
+        max_iters = 600
+        for _ in range(max_iters):
+            dx = ex - x
+            dy = ey - y
+            dist = math.hypot(dx, dy)
+            if dist <= 1.0:
+                break
 
-        return self
+            wind_mag = min(wind, dist)
+            if dist >= target_area:
+                wind_x = wind_x / math.sqrt(3) + random.uniform(-wind_mag, wind_mag) / math.sqrt(5)
+                wind_y = wind_y / math.sqrt(3) + random.uniform(-wind_mag, wind_mag) / math.sqrt(5)
+            else:
+                wind_x *= close_damping
+                wind_y *= close_damping
+                max_step = max(3.0, max_step * 0.93)
+
+            if dist > 0:
+                velocity_x += wind_x + gravity * dx / dist
+                velocity_y += wind_y + gravity * dy / dist
+
+            velocity_x *= damping
+            velocity_y *= damping
+
+            velocity_mag = math.hypot(velocity_x, velocity_y)
+            if velocity_mag > max_step and velocity_mag > 0:
+                scale = max_step / velocity_mag
+                velocity_x *= scale
+                velocity_y *= scale
+
+            prev_x = x
+            prev_y = y
+            x += velocity_x
+            y += velocity_y
+
+            if int(prev_x) != int(x) or int(prev_y) != int(y):
+                path.append((x, y))
+
+        if not path or int(path[-1][0]) != int(ex) or int(path[-1][1]) != int(ey):
+            path.append((float(ex), float(ey)))
+        return path
+
+    def _resolve_human_algorithm(self, algorithm=None):
+        """解析本次 human 动作应使用的轨迹算法。"""
+        if algorithm:
+            value = str(algorithm).strip().lower()
+        else:
+            value = "bezier"
+            browser = getattr(self._owner, "_browser", None)
+            options = getattr(browser, "options", None) if browser else None
+            if options:
+                value = str(getattr(options, "human_algorithm", "bezier") or "bezier").strip().lower()
+
+        if value not in ("bezier", "windmouse"):
+            raise ValueError('human algorithm 必须是 "bezier" 或 "windmouse"')
+        return value
 
     def human_type(self, text, min_delay=0.045, max_delay=0.24):
         """拟人化输入文本。
@@ -874,3 +1010,59 @@ class Actions(object):
         ny = dx / dist
         offset = dist * random.uniform(0.3, 0.6) * random.choice([-1, 1])
         return (mx + nx * offset, my + ny * offset)
+
+    # ════════════════════════════════════════════════════════════════
+    #  可视化数据注入
+    # ════════════════════════════════════════════════════════════════
+
+    def _is_visual_enabled(self):
+        """检查是否启用了 action_visual。"""
+        browser = getattr(self._owner, "_browser", None)
+        if not browser:
+            return False
+        options = getattr(browser, "options", None)
+        return bool(options and getattr(options, "action_visual_enabled", False))
+
+    def _send_visual_data(self, pointer_actions, key_actions):
+        """将鼠标动作数据注入页面 JS 端进行可视化渲染。"""
+        if not self._is_visual_enabled():
+            return
+
+        try:
+            # 提取移动坐标点
+            move_points = []
+            for a in pointer_actions:
+                if a.get("type") == "pointerMove":
+                    move_points.append([int(a.get("x", 0)), int(a.get("y", 0))])
+
+            # 提取点击事件
+            clicks = []
+            last_x, last_y = self.curr_x, self.curr_y
+            for a in pointer_actions:
+                if a.get("type") == "pointerMove":
+                    last_x = int(a.get("x", last_x))
+                    last_y = int(a.get("y", last_y))
+                elif a.get("type") == "pointerDown":
+                    clicks.append([last_x, last_y, a.get("button", 0)])
+
+            # 构建 JS 调用
+            js_parts = []
+            if move_points:
+                import json
+
+                js_parts.append(
+                    "if(window.__ruyiAV)window.__ruyiAV.moves({})".format(
+                        json.dumps(move_points)
+                    )
+                )
+            for cx, cy, btn in clicks:
+                js_parts.append(
+                    "if(window.__ruyiAV)window.__ruyiAV.click({},{},{})".format(
+                        cx, cy, btn
+                    )
+                )
+
+            if js_parts:
+                self._owner.run_js(";".join(js_parts), as_expr=True)
+        except Exception:
+            pass

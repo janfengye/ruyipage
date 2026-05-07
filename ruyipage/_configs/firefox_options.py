@@ -51,6 +51,7 @@ class FirefoxOptions(object):
             "script": 30,
         }
         self._existing_only = False
+        self._close_on_exit = True
         self._retry_times = 10
         self._retry_interval = 2.0
         self._proxy = None
@@ -60,6 +61,15 @@ class FirefoxOptions(object):
         self._private_mode = False  # Firefox 私密浏览模式
         self._user_prompt_handler = None  # session.UserPromptHandler
         self._xpath_picker_enabled = False  # 页面 XPath 选择浮窗
+        self._action_visual_enabled = False  # 鼠标行为可视化调试
+        self._human_algorithm = "bezier"  # 拟人鼠标轨迹算法
+        self._trace_enabled = False  # debug trace 记录
+        self._failure_snapshot_enabled = False  # 失败自动诊断快照
+        self._snapshot_dir = None  # 诊断快照保存目录
+        # 某些 Firefox / 指纹浏览器 / 个别机器环境在带 --marionette
+        # 启动时会直接崩溃或闪退，导致后续 BiDi 端口连接失败。
+        # 默认保持启用以兼容历史行为，但允许用户显式关闭。
+        self._marionette_enabled = True  # 是否启用 Marionette 启动通道
 
     # ===== 属性读取 =====
 
@@ -116,6 +126,11 @@ class FirefoxOptions(object):
         return self._retry_times
 
     @property
+    def close_on_exit_enabled(self):
+        """Python 进程退出时是否自动关闭浏览器。"""
+        return self._close_on_exit
+
+    @property
     def retry_interval(self):
         return self._retry_interval
 
@@ -151,6 +166,36 @@ class FirefoxOptions(object):
         """是否在启动时自动注入 XPath 选择浮窗。"""
         return self._xpath_picker_enabled
 
+    @property
+    def action_visual_enabled(self):
+        """是否启用鼠标行为可视化调试模式。"""
+        return self._action_visual_enabled
+
+    @property
+    def human_algorithm(self):
+        """默认拟人鼠标轨迹算法。"""
+        return self._human_algorithm
+
+    @property
+    def trace_enabled(self):
+        """是否启用 debug trace 记录。"""
+        return self._trace_enabled
+
+    @property
+    def failure_snapshot_enabled(self):
+        """是否启用失败自动诊断快照。"""
+        return self._failure_snapshot_enabled
+
+    @property
+    def snapshot_dir(self):
+        """诊断快照保存目录。"""
+        return self._snapshot_dir
+
+    @property
+    def marionette_enabled(self):
+        """是否启用 Marionette 启动通道。"""
+        return self._marionette_enabled
+
     # ===== 链式设置方法 =====
 
     def set_browser_path(self, path):
@@ -161,7 +206,7 @@ class FirefoxOptions(object):
                 常见值：
                 Windows: ``r'C:\\Program Files\\Mozilla Firefox\\firefox.exe'``
                 macOS: ``'/Applications/Firefox.app/Contents/MacOS/firefox'``
-                Linux: ``'/usr/bin/firefox'``
+                Linux: ``'/usr/bin/firefox'`` or a directory containing ``firefox``
 
         Returns:
             self: 原配置对象，便于链式调用。
@@ -171,6 +216,10 @@ class FirefoxOptions(object):
             - 同时存在多个 Firefox 版本，想指定其中一个
             - 便携版 Firefox 需要显式指定 exe 路径
         """
+        path = os.path.expanduser(str(path))
+        if os.path.isdir(path):
+            exe_name = "firefox.exe" if sys.platform == "win32" else "firefox"
+            path = os.path.join(path, exe_name)
         self._browser_path = path
         return self
 
@@ -385,6 +434,26 @@ class FirefoxOptions(object):
         self._existing_only = on_off
         return self
 
+    def close_on_exit(self, on_off=True):
+        """设置 Python 进程退出时是否自动关闭浏览器。
+
+        Args:
+            on_off: ``True`` 表示当前 Python 程序退出时自动关闭由 ruyipage
+                    启动的浏览器；``False`` 表示仅断开连接，不主动关闭浏览器。
+
+        Returns:
+            self
+
+        说明：
+            - 默认值为 ``True``，更符合“脚本结束即收尾”的直觉。
+            - 对 ``existing_only(True)`` 接管的外部浏览器，此选项不会强制杀掉
+              外部进程；退出时仍只做断开连接，避免误关用户自己打开的浏览器。
+            - 对 ruyipage 自动创建的临时 profile，若执行完整关闭，会一并清理
+              该临时目录。
+        """
+        self._close_on_exit = bool(on_off)
+        return self
+
     def set_auto_port(self, on_off=True):
         """自动寻找可用端口
 
@@ -427,6 +496,48 @@ class FirefoxOptions(object):
         self._fpfile = path
         return self
 
+    def smart_fingerprint(self, **kwargs):
+        """一站式智能指纹配置（链式调用入口）。
+
+        基于 ``firefox-fingerprintBrowser`` 内核与 ruyipage 内置的 22 套
+        Windows 真机硬件特征 + 30 国语言映射，自动完成：
+
+        1. 出口 IP / 地理位置探测（5 个数据源回退，可选 IPv6 富化）；
+        2. 国家校验（``require_country`` 不匹配直接抛 ``CountryMismatchError``）；
+        3. 随机抽取硬件指纹 + 拼装 Firefox 151 ±2 UA + 随机 canvas 种子；
+        4. 写入符合内核 ``key:value`` 字段顺序的 ``fpfile.txt``；
+        5. 自动配置当前 ``FirefoxOptions``：proxy / userdir / fpfile / 窗口大小。
+
+        所有关键字参数透传到 :func:`ruyipage.apply_smart_fingerprint`，常用
+        参数包括 ``proxy_host`` / ``proxy_port`` / ``proxy_user`` / ``proxy_pwd``
+        / ``require_country`` / ``base_dir`` / ``logger`` 等。
+
+        Returns:
+            FingerprintContext: 指纹上下文。可调用 ``ctx.apply_emulation(page)``
+            注入 BiDi 仿真覆盖层，或 ``ctx.summary()`` 输出单行日志。
+
+        Raises:
+            CountryMismatchError: 出口 IP 国家与 ``require_country`` 不一致。
+            GeoError: 5 个 geo 数据源全部失败。
+            FingerprintConfigError: 内置 JSON 数据文件损坏。
+
+        Example::
+
+            opts = FirefoxOptions().set_port(9222)
+            opts.set_browser_path(r"C:/Program Files/Mozilla Firefox/firefox.exe")
+            ctx = opts.smart_fingerprint(
+                proxy_host="proxy.example.com", proxy_port=8080,
+                proxy_user="u", proxy_pwd="p",
+                require_country="US",
+                logger=print,
+            )
+            page = FirefoxPage(opts)
+            ctx.apply_emulation(page)
+        """
+        # Lazy import 避免与 ruyipage.__init__ 的循环依赖。
+        from .._fingerprint import apply_smart_fingerprint
+        return apply_smart_fingerprint(self, **kwargs)
+
     def private_mode(self, on_off=True):
         """设置 Firefox 私密浏览模式。
 
@@ -458,6 +569,123 @@ class FirefoxOptions(object):
             - 点击浮窗中的“解锁”后，才会重新允许选择下一个元素。
         """
         self._xpath_picker_enabled = bool(on_off)
+        return self
+
+    def enable_action_visual(self, on_off=True):
+        """设置是否启用鼠标行为可视化调试模式。
+
+        Args:
+            on_off: ``True`` 启用，``False`` 关闭。
+
+        Returns:
+            self
+
+        说明：
+            - 启用后页面上会显示实时鼠标坐标指示器。
+            - 拟人化移动时渲染贝塞尔曲线轨迹。
+            - 点击位置显示扩散圆环 + 十字准星动画。
+            - 键盘输入在右上角短暂显示按键文字。
+        """
+        self._action_visual_enabled = bool(on_off)
+        return self
+
+    def set_human_algorithm(self, name="bezier"):
+        """设置默认拟人鼠标轨迹算法。
+
+        Args:
+            name: 轨迹算法名。
+                当前支持：
+                - ``"bezier"``：当前默认算法，轨迹更平滑，支持 ``style`` 变体
+                - ``"windmouse"``：模拟风力 + 重力拖拽的轨迹，路径更飘逸
+
+        Returns:
+            self
+
+        说明：
+            - 默认值为 ``"bezier"``，兼容已有行为。
+            - 该设置会作为 ``page.actions.human_move()`` /
+              ``page.actions.human_click()`` 的默认算法。
+            - 单次调用时可通过 ``algorithm=...`` 覆盖这里的默认值。
+        """
+        value = str(name or "bezier").strip().lower()
+        if value not in ("bezier", "windmouse"):
+            raise ValueError('human_algorithm 必须是 "bezier" 或 "windmouse"')
+        self._human_algorithm = value
+        return self
+
+    def enable_trace(self, on_off=True):
+        """启用 debug trace 记录。
+
+        开启后，所有 BiDi 命令、事件、网络活动将记录到内存环形缓冲区，
+        可通过 ``page.trace.summary()`` 或 ``page.trace.dump_json()`` 查看。
+
+        Args:
+            on_off: ``True`` 启用，``False`` 关闭。默认关闭。
+
+        Returns:
+            self
+
+        说明：
+            - 关闭状态下零开销（仅一次属性检查 ~10ns/命令）。
+            - 缓冲区大小通过 ``Settings.trace_max_entries`` 控制（默认 1000）。
+        """
+        self._trace_enabled = bool(on_off)
+        return self
+
+    def enable_failure_snapshot(self, on_off=True):
+        """启用自动化失败时的诊断快照。
+
+        开启后，元素查找失败、页面加载超时、JS 异常等操作失败时，
+        框架自动收集截图、DOM、URL 和最近网络请求记录，
+        并附加到异常对象的 ``.diagnostics`` 属性上。
+
+        Args:
+            on_off: ``True`` 启用，``False`` 关闭。默认关闭。
+
+        Returns:
+            self
+
+        说明：
+            - 配合 ``set_snapshot_dir()`` 可自动保存快照文件到磁盘。
+            - 收集过程每步独立容错，某步失败不影响其他信息的收集。
+        """
+        self._failure_snapshot_enabled = bool(on_off)
+        return self
+
+    def enable_marionette(self, on_off=True):
+        """设置是否启用 Firefox Marionette 通道。
+
+        Args:
+            on_off: ``True`` 启用，``False`` 关闭。
+
+        Returns:
+            self
+
+        说明：
+            - 默认值为 ``True``，保持现有兼容行为。
+            - 若某些 Firefox / 指纹浏览器在带 ``--marionette`` 时崩溃，
+              可显式关闭：``FirefoxOptions().enable_marionette(False)``。
+            - 关闭后不会在启动命令里加入 ``--marionette``，也不会向
+              profile 写入 ``marionette.enabled=true``。
+        """
+        self._marionette_enabled = bool(on_off)
+        return self
+
+    def set_snapshot_dir(self, path):
+        """设置诊断快照的保存目录。
+
+        当自动化失败且 ``enable_failure_snapshot(True)`` 时，
+        截图、DOM、trace 等文件将保存到此目录。
+
+        Args:
+            path: 目录路径，如 ``'./ruyipage_snapshots'``。
+                传入 None 则不保存文件（仅附加到异常对象）。
+
+        Returns:
+            self
+        """
+        import os
+        self._snapshot_dir = os.path.abspath(path) if path else None
         return self
 
     def _get_proxy_auth_credentials(self):
@@ -531,31 +759,47 @@ class FirefoxOptions(object):
         *,
         browser_path=None,
         user_dir=None,
+        close_on_exit=True,
         private=False,
         headless=False,
         xpath_picker=False,
+        action_visual=False,
+        human_algorithm="bezier",
         window_size=(1280, 800),
         timeout_base=10,
         timeout_page_load=30,
         timeout_script=30,
+        trace=False,
+        failure_snapshot=False,
+        snapshot_dir=None,
+        marionette=True,
     ):
         """小白友好的一键启动预设。
 
         该方法会一次性设置常用参数，便于快速开始。
-        这是给“先跑起来再深入”的使用场景准备的快捷入口。
+        这是给”先跑起来再深入”的使用场景准备的快捷入口。
 
         Args:
             browser_path: Firefox 可执行文件路径。
                 适用于 Firefox 安装在非默认目录时。
             user_dir: 用户目录 / profile 目录。
                 适用于希望复用登录态、Cookie、扩展时。
+            close_on_exit: Python 程序退出时是否自动关闭浏览器。
+                默认 ``True``，适合脚本跑完自动收尾。
             private: 是否启用 Firefox 私密浏览模式。
             headless: 是否无头
             xpath_picker: 是否启用页面 XPath 选择浮窗
+            action_visual: 是否启用鼠标行为可视化调试模式
+            human_algorithm: 默认拟人鼠标轨迹算法。
+                可选 ``"bezier"`` 或 ``"windmouse"``。
             window_size: 窗口大小 (width, height)
             timeout_base: 基础超时
             timeout_page_load: 页面加载超时
             timeout_script: 脚本执行超时
+            trace: 是否启用 debug trace 记录
+            failure_snapshot: 是否启用失败自动诊断快照
+            snapshot_dir: 诊断快照保存目录
+            marionette: 是否启用 Firefox Marionette 通道
 
         Returns:
             self
@@ -563,8 +807,8 @@ class FirefoxOptions(object):
         典型用法::
 
             opts = FirefoxOptions().set_port(9222).quick_start(
-                browser_path=r"D:\\FirefoxPortable\\firefox.exe",
-                user_dir=r"D:\\my_firefox_userdir",
+                browser_path=r”D:\\FirefoxPortable\\firefox.exe”,
+                user_dir=r”D:\\my_firefox_userdir”,
                 headless=False,
             )
             page = FirefoxPage(opts)
@@ -573,9 +817,12 @@ class FirefoxOptions(object):
             self.set_browser_path(browser_path)
         if user_dir:
             self.set_user_dir(user_dir)
+        self.close_on_exit(close_on_exit)
         self.private_mode(private)
         self.headless(headless)
         self.enable_xpath_picker(xpath_picker)
+        self.enable_action_visual(action_visual)
+        self.set_human_algorithm(human_algorithm)
         if window_size and len(window_size) == 2:
             self.set_window_size(window_size[0], window_size[1])
         self.set_timeouts(
@@ -583,6 +830,11 @@ class FirefoxOptions(object):
             page_load=timeout_page_load,
             script=timeout_script,
         )
+        self.enable_trace(trace)
+        self.enable_failure_snapshot(failure_snapshot)
+        self.enable_marionette(marionette)
+        if snapshot_dir:
+            self.set_snapshot_dir(snapshot_dir)
         return self
 
     def build_command(self):
@@ -595,7 +847,10 @@ class FirefoxOptions(object):
 
         cmd.append("--remote-debugging-port={}".format(self._port))
         cmd.append("--no-remote")
-        cmd.append("--marionette")
+        # Marionette 不是 BiDi 主链路必需项；若某些环境带该参数会闪退，
+        # 可通过 enable_marionette(False) 关闭，仅保留 remote-debugging-port。
+        if self._marionette_enabled:
+            cmd.append("--marionette")
 
         if self._profile_path:
             cmd.append("--profile")
@@ -634,8 +889,10 @@ class FirefoxOptions(object):
         prefs.setdefault("browser.startup.homepage_override.mstone", "ignore")
         prefs.setdefault("browser.tabs.warnOnClose", False)
         prefs.setdefault("browser.warnOnQuit", False)
-        # 启用 Marionette（特权 JS 通道，用于 about:config 运行时读写）
-        prefs.setdefault("marionette.enabled", True)
+        # 仅在显式启用时才写入该 pref，避免某些环境因 Marionette 启动异常
+        # 而在浏览器尚未建立 BiDi 连接前就崩溃/闪退。
+        if self._marionette_enabled:
+            prefs.setdefault("marionette.enabled", True)
 
         # 下载设置
         if self._download_path:

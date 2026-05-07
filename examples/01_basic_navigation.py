@@ -12,15 +12,19 @@
 import os
 import sys
 import io
+from pathlib import Path
 
 # 设置控制台输出编码为UTF-8（Windows兼容）
-if sys.platform == 'win32':
-    sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding='utf-8')
-    sys.stderr = io.TextIOWrapper(sys.stderr.buffer, encoding='utf-8')
+if sys.platform == "win32":
+    sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding="utf-8")
+    sys.stderr = io.TextIOWrapper(sys.stderr.buffer, encoding="utf-8")
 
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
+BASE_DIR = Path(__file__).resolve().parent
+
+sys.path.insert(0, str(BASE_DIR.parent))
 
 from ruyipage import FirefoxPage, FirefoxOptions
+
 
 def test_basic_navigation():
     """测试基础导航功能"""
@@ -35,8 +39,8 @@ def test_basic_navigation():
 
     try:
         # 1. 导航到测试页面
-        test_page = os.path.join(os.path.dirname(__file__), 'test_pages', 'test_page.html')
-        test_url = 'file:///' + os.path.abspath(test_page).replace('\\', '/')
+        test_page = BASE_DIR / "test_pages" / "test_page.html"
+        test_url = test_page.resolve().as_uri()
         print(f"\n1. 导航到测试页面: {test_url}")
         page.get(test_url)
         print(f"   ✓ 页面加载成功")
@@ -49,7 +53,7 @@ def test_basic_navigation():
 
         # 3. 导航到其他页面
         print(f"\n3. 导航到其他页面:")
-        page.get('https://www.example.com')
+        page.get("https://www.example.com")
         print(f"   当前标题: {page.title}")
         print(f"   当前URL: {page.url}")
 
@@ -73,15 +77,15 @@ def test_basic_navigation():
 
         # 7. 保存页面
         print(f"\n7. 保存页面:")
-        save_dir = os.path.join(os.path.dirname(__file__), 'output')
-        os.makedirs(save_dir, exist_ok=True)
+        save_dir = BASE_DIR / "output"
+        save_dir.mkdir(exist_ok=True)
 
         # 保存为HTML
-        html_path = page.save(path=save_dir, name='example_page', as_pdf=False)
+        html_path = page.save(path=str(save_dir), name="example_page", as_pdf=False)
         print(f"   HTML已保存: {html_path}")
 
         # 保存为PDF
-        pdf_path = page.save(path=save_dir, name='example_page', as_pdf=True)
+        pdf_path = page.save(path=str(save_dir), name="example_page", as_pdf=True)
         print(f"   PDF已保存: {pdf_path}")
 
         print("\n" + "=" * 60)
@@ -91,11 +95,13 @@ def test_basic_navigation():
     except Exception as e:
         print(f"\n✗ 测试失败: {e}")
         import traceback
+
         traceback.print_exc()
     finally:
         # 关闭浏览器
         page.wait(2)
         page.quit()
 
-if __name__ == '__main__':
+
+if __name__ == "__main__":
     test_basic_navigation()

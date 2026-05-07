@@ -8,6 +8,7 @@
 import os
 import sys
 import time
+import atexit
 import socket
 import logging
 import tempfile
@@ -17,6 +18,7 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 
 from .driver import BrowserBiDiDriver, ContextDriver
 from .._adapter.remote_agent import get_bidi_ws_url
+from .._functions.sleep import sleep as _sleep
 from .._configs.firefox_options import FirefoxOptions
 from .._bidi import network as bidi_network
 from .._bidi import session as bidi_session
@@ -30,6 +32,8 @@ DEFAULT_FIREFOX_PROCESS_NAME_PATTERNS = (
     "firefox.exe",
     "flowerbrowser.exe",
     "adsbrowser.exe",
+    "firefox",
+    "firefox-bin",
 )
 
 DEFAULT_FIREFOX_COMMANDLINE_PATTERNS = (
@@ -48,22 +52,55 @@ def _probe_bidi_address(address, timeout=1.0, keep_driver=False):
     host, port = address.rsplit(":", 1)
     try:
         port = int(port)
-    except Exception:
+    except (TypeError, ValueError):
         return None
+
+    def _occupied_result(status_message="", error_message="", ws_url=""):
+        return {
+            "address": address,
+            "host": host,
+            "port": port,
+            "ready": False,
+            "message": status_message,
+            "status_message": status_message,
+            "error_message": error_message,
+            "probe_state": "occupied",
+            "ws_url": ws_url,
+            "driver": None,
+            "session_id": "",
+            "window_count": 0,
+            "tab_count": 0,
+            "client_windows": [],
+            "contexts": [],
+            "session_owned": False,
+        }
+
+    def _release_probe_session(driver_obj, owns_session):
+        if not driver_obj or not owns_session:
+            return
+        try:
+            bidi_session.end(driver_obj)
+        except Exception:
+            pass
 
     sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
     sock.settimeout(timeout)
     try:
         sock.connect((host, port))
-        sock.close()
     except Exception:
         try:
             sock.close()
         except Exception:
             pass
         return None
+    finally:
+        try:
+            sock.close()
+        except Exception:
+            pass
 
     driver = None
+    session_owned = False
     try:
         ws_url = get_bidi_ws_url(host, port, timeout=max(1, timeout))
         driver = BrowserBiDiDriver(address)
@@ -78,20 +115,36 @@ def _probe_bidi_address(address, timeout=1.0, keep_driver=False):
         # "Session already started"，但不会把已有 session 交给新连接复用，
         # 后续任何 browsingContext 命令都会报 invalid session id。
         if not ready:
-            return None
+            return _occupied_result(status_message=message, ws_url=ws_url)
 
-        result = bidi_session.new(driver, {})
+        try:
+            result = bidi_session.new(driver, {})
+            session_owned = True
+        except Exception as e:
+            err_text = str(e)
+            err_lower = err_text.lower()
+            if "maximum number of active sessions" in err_lower or (
+                "session not created" in err_lower and "maximum" in err_lower
+            ):
+                return _occupied_result(
+                    status_message=message,
+                    error_message=err_text,
+                    ws_url=ws_url,
+                )
+            raise
         session_id = result.get("sessionId", "")
         driver.session_id = session_id
         windows = []
         contexts = []
         try:
             windows = driver.run("browser.getClientWindows").get("clientWindows", [])
-        except Exception:
+        except Exception as e:
+            logger.debug("探测窗口信息失败: %s", e)
             windows = []
         try:
             contexts = bidi_context.get_tree(driver, max_depth=0).get("contexts", [])
-        except Exception:
+        except Exception as e:
+            logger.debug("探测上下文信息失败: %s", e)
             contexts = []
 
         return {
@@ -105,6 +158,10 @@ def _probe_bidi_address(address, timeout=1.0, keep_driver=False):
             "session_id": session_id,
             "window_count": len(windows),
             "tab_count": len(contexts),
+            "probe_state": "attachable",
+            "status_message": message,
+            "error_message": "",
+            "session_owned": session_owned,
             "client_windows": windows,
             "contexts": [
                 {
@@ -116,10 +173,12 @@ def _probe_bidi_address(address, timeout=1.0, keep_driver=False):
                 for c in contexts
             ],
         }
-    except Exception:
+    except Exception as e:
+        logger.debug("探测 BiDi 地址失败 %s: %s", address, e)
         return None
     finally:
         if driver and not keep_driver:
+            _release_probe_session(driver, session_owned)
             try:
                 driver.stop()
             except Exception:
@@ -142,16 +201,22 @@ def create_browser_from_probe_info(info):
     browser._driver = driver
     browser._process = None
     browser._session_id = info.get("session_id", "")
+    browser._owns_session = bool(info.get("session_owned"))
     browser._contexts = {}
     browser._context_ids = [
         c.get("context", "") for c in (info.get("contexts") or []) if c.get("context")
     ]
     browser._context_ids_lock = threading.Lock()
+    browser._context_nav_locks = {}
+    browser._context_nav_locks_lock = threading.Lock()
+    browser._init_lock = threading.Lock()
     browser._auto_profile = None
     browser._quit_lock = threading.Lock()
     browser._proxy_auth_intercept_id = None
     browser._proxy_auth_subscription_id = None
     browser._xpath_picker_last_reinject = {}
+    browser._atexit_registered = False
+    browser._register_exit_cleanup()
     browser._initialized = True
     return browser
 
@@ -184,13 +249,90 @@ def find_existing_browsers(
         for future in as_completed(future_map):
             try:
                 info = future.result()
-            except Exception:
+            except Exception as e:
+                logger.debug("端口扫描线程异常: %s", e)
                 info = None
             if info:
-                result.append(info)
+                if info.get("probe_state", "attachable") == "attachable":
+                    result.append(info)
 
     result.sort(key=lambda item: int(item.get("port", 0)))
     return result
+
+
+def _discover_pids_and_ports_linux(process_name_patterns, commandline_patterns):
+    """Linux: 通过 /proc 发现匹配的 Firefox 进程及其监听端口。"""
+    pids = set()
+    ports = set()
+
+    for entry in os.listdir("/proc"):
+        if not entry.isdigit():
+            continue
+        pid = int(entry)
+        try:
+            with open("/proc/{}/comm".format(pid), "r") as f:
+                comm = f.read().strip().lower()
+        except (OSError, PermissionError):
+            continue
+        try:
+            with open("/proc/{}/cmdline".format(pid), "rb") as f:
+                cmdline = f.read().decode(errors="replace").replace("\x00", " ").lower()
+        except (OSError, PermissionError):
+            cmdline = ""
+
+        name_ok = any(p in comm for p in process_name_patterns)
+        cmd_ok = any(p in cmdline for p in commandline_patterns)
+        if name_ok or cmd_ok:
+            pids.add(pid)
+
+    if not pids:
+        return pids, ports
+
+    LOCAL_ADDRS_V4 = {"0100007F", "00000000"}
+    LOCAL_ADDRS_V6 = {
+        "00000000000000000000000000000000",
+        "00000000000000000000000001000000",
+    }
+    inode_to_port = {}
+
+    for tcp_file, local_addrs in [
+        ("/proc/net/tcp", LOCAL_ADDRS_V4),
+        ("/proc/net/tcp6", LOCAL_ADDRS_V6),
+    ]:
+        try:
+            with open(tcp_file, "r") as f:
+                for line in f:
+                    parts = line.strip().split()
+                    if len(parts) < 10 or parts[3] != "0A":
+                        continue
+                    ip_hex, port_hex = parts[1].rsplit(":", 1)
+                    if ip_hex in local_addrs:
+                        port = int(port_hex, 16)
+                        inode = parts[9]
+                        if inode != "0":
+                            inode_to_port[inode] = port
+        except (OSError, PermissionError):
+            continue
+
+    if not inode_to_port:
+        return pids, ports
+
+    for pid in pids:
+        fd_dir = "/proc/{}/fd".format(pid)
+        try:
+            for fd_name in os.listdir(fd_dir):
+                try:
+                    link = os.readlink(os.path.join(fd_dir, fd_name))
+                except (OSError, PermissionError):
+                    continue
+                if link.startswith("socket:[") and link.endswith("]"):
+                    inode = link[8:-1]
+                    if inode in inode_to_port:
+                        ports.add(inode_to_port[inode])
+        except (OSError, PermissionError):
+            continue
+
+    return pids, ports
 
 
 def find_existing_browsers_by_process(
@@ -240,8 +382,8 @@ def find_existing_browsers_by_process(
                 cmd_ok = any(p in cmd for p in commandline_patterns)
                 if name_ok or cmd_ok:
                     pids.add(pid)
-        except Exception:
-            pass
+        except Exception as e:
+            logger.debug("进程扫描失败: %s", e)
 
         if pids:
             ps_net = (
@@ -269,8 +411,15 @@ def find_existing_browsers_by_process(
                         and addr in ("127.0.0.1", "::1", "0.0.0.0")
                     ):
                         ports.add(port)
-            except Exception:
-                pass
+            except Exception as e:
+                logger.debug("进程扫描失败: %s", e)
+    else:
+        try:
+            pids, ports = _discover_pids_and_ports_linux(
+                process_name_patterns, commandline_patterns
+            )
+        except Exception as e:
+            logger.debug("进程扫描失败: %s", e)
 
     if not ports:
         return []
@@ -292,11 +441,13 @@ def find_existing_browsers_by_process(
         for future in as_completed(future_map):
             try:
                 info = future.result()
-            except Exception:
+            except Exception as e:
+                logger.debug("端口扫描线程异常: %s", e)
                 info = None
             if info:
                 info["scanned_ports"] = sorted(ports)
-                result.append(info)
+                if info.get("probe_state", "attachable") == "attachable":
+                    result.append(info)
 
     result.sort(key=lambda item: int(item.get("port", 0)))
     return result
@@ -341,8 +492,8 @@ def find_candidate_ports_by_process(
                 cmd_ok = any(p in cmd for p in commandline_patterns)
                 if name_ok or cmd_ok:
                     pids.add(pid)
-        except Exception:
-            pass
+        except Exception as e:
+            logger.debug("进程扫描失败: %s", e)
 
         if pids:
             ps_net = (
@@ -370,8 +521,15 @@ def find_candidate_ports_by_process(
                         and addr in ("127.0.0.1", "::1", "0.0.0.0")
                     ):
                         ports.add(port)
-            except Exception:
-                pass
+            except Exception as e:
+                logger.debug("进程扫描失败: %s", e)
+    else:
+        try:
+            _, ports = _discover_pids_and_ports_linux(
+                process_name_patterns, commandline_patterns
+            )
+        except Exception as e:
+            logger.debug("进程扫描失败: %s", e)
 
     return sorted(ports)
 
@@ -394,63 +552,116 @@ class Firefox(object):
 
     _BROWSERS = {}  # {address: Firefox}
     _lock = threading.Lock()
+    _launch_lock = threading.Lock()
+    _RESERVED_PORTS = set()
+
+    @classmethod
+    def _cache_key_for(cls, addr_or_opts=None):
+        """仅对显式 attach 场景启用地址级单例缓存。"""
+        if isinstance(addr_or_opts, FirefoxOptions):
+            if not addr_or_opts.is_existing_only:
+                return None
+            return addr_or_opts.address
+
+        if isinstance(addr_or_opts, str):
+            return addr_or_opts
+
+        return None
 
     def __new__(cls, addr_or_opts=None):
-        if isinstance(addr_or_opts, FirefoxOptions):
-            address = addr_or_opts.address
-        elif isinstance(addr_or_opts, str):
-            address = addr_or_opts
-        elif addr_or_opts is None:
-            address = "127.0.0.1:9222"
-        else:
-            address = str(addr_or_opts)
+        cache_key = cls._cache_key_for(addr_or_opts)
 
         with cls._lock:
-            if address in cls._BROWSERS:
-                return cls._BROWSERS[address]
+            if cache_key is not None and cache_key in cls._BROWSERS:
+                return cls._BROWSERS[cache_key]
             instance = super(Firefox, cls).__new__(cls)
             instance._initialized = False
-            cls._BROWSERS[address] = instance
+            instance._init_lock = threading.Lock()
+            if cache_key is not None:
+                cls._BROWSERS[cache_key] = instance
             return instance
 
     def __init__(self, addr_or_opts=None):
-        if self._initialized:
+        with self._init_lock:
+            if self._initialized:
+                return
+
+            # 解析参数
+            if isinstance(addr_or_opts, FirefoxOptions):
+                self._options = addr_or_opts
+            elif isinstance(addr_or_opts, str):
+                self._options = FirefoxOptions()
+                self._options.set_address(addr_or_opts)
+            elif addr_or_opts is None:
+                self._options = FirefoxOptions()
+            else:
+                self._options = FirefoxOptions()
+                self._options.set_address(str(addr_or_opts))
+
+            self._address = self._options.address
+            self._driver = None  # type: BrowserBiDiDriver
+            self._process = None  # type: subprocess.Popen
+            self._session_id = None
+            self._owns_session = False
+            self._contexts = {}  # {context_id: FirefoxTab 弱引用信息}
+            self._context_ids = []  # 有序的 context ID 列表
+            self._context_ids_lock = threading.Lock()
+            self._context_nav_locks = {}
+            self._context_nav_locks_lock = threading.Lock()
+            self._reserved_port = None
+            self._auto_profile = None  # 自动创建的临时 profile
+            self._quit_lock = threading.Lock()
+            self._proxy_auth_intercept_id = None
+            self._proxy_auth_subscription_id = None
+            self._xpath_picker_last_reinject = {}
+            self._atexit_registered = False
+
+            try:
+                self._connect_or_launch()
+                self._register_exit_cleanup()
+                with self._lock:
+                    self._BROWSERS[self._address] = self
+                self._initialized = True
+            except Exception:
+                # 初始化失败时移除单例，避免后续复用半初始化对象
+                with self._lock:
+                    if self._BROWSERS.get(self._address) is self:
+                        self._BROWSERS.pop(self._address, None)
+                self._initialized = False
+                raise
+
+    def get_context_nav_lock(self, context_id):
+        """返回某个 browsing context 专属的导航锁。"""
+        with self._context_nav_locks_lock:
+            lock = self._context_nav_locks.get(context_id)
+            if lock is None:
+                lock = threading.RLock()
+                self._context_nav_locks[context_id] = lock
+            return lock
+
+    def _reserve_port(self, port):
+        """在进程内保留一个即将用于启动的调试端口。"""
+        if port is None:
             return
+        self._RESERVED_PORTS.add(port)
+        self._reserved_port = port
 
-        # 解析参数
-        if isinstance(addr_or_opts, FirefoxOptions):
-            self._options = addr_or_opts
-        elif isinstance(addr_or_opts, str):
-            self._options = FirefoxOptions()
-            self._options.set_address(addr_or_opts)
-        elif addr_or_opts is None:
-            self._options = FirefoxOptions()
-        else:
-            self._options = FirefoxOptions()
-            self._options.set_address(str(addr_or_opts))
+    def _release_reserved_port(self, port=None):
+        """释放进程内保留的调试端口。"""
+        port = self._reserved_port if port is None else port
+        if port is None:
+            return
+        self._RESERVED_PORTS.discard(port)
+        if self._reserved_port == port:
+            self._reserved_port = None
 
+    def _set_launch_port(self, port):
+        """更新 options/address，并同步进程内端口保留。"""
+        if self._reserved_port is not None and self._reserved_port != port:
+            self._release_reserved_port(self._reserved_port)
+        self._options.set_port(port)
         self._address = self._options.address
-        self._driver = None  # type: BrowserBiDiDriver
-        self._process = None  # type: subprocess.Popen
-        self._session_id = None
-        self._contexts = {}  # {context_id: FirefoxTab 弱引用信息}
-        self._context_ids = []  # 有序的 context ID 列表
-        self._context_ids_lock = threading.Lock()
-        self._auto_profile = None  # 自动创建的临时 profile
-        self._quit_lock = threading.Lock()
-        self._proxy_auth_intercept_id = None
-        self._proxy_auth_subscription_id = None
-        self._xpath_picker_last_reinject = {}
-
-        try:
-            self._connect_or_launch()
-            self._initialized = True
-        except Exception:
-            # 初始化失败时移除单例，避免后续复用半初始化对象
-            with self._lock:
-                self._BROWSERS.pop(self._address, None)
-            self._initialized = False
-            raise
+        self._reserve_port(port)
 
     @property
     def address(self):
@@ -682,6 +893,8 @@ class Firefox(object):
             force: 是否强制结束进程
         """
         with self._quit_lock:
+            if self._driver:
+                self._driver.mark_closing()
             try:
                 self._driver.run("browser.close", timeout=3)
             except Exception:
@@ -689,6 +902,12 @@ class Firefox(object):
 
             if self._driver:
                 self._teardown_proxy_auth()
+                if self._owns_session:
+                    try:
+                        bidi_session.end(self._driver)
+                    except Exception:
+                        pass
+                    self._owns_session = False
                 self._driver.stop()
                 self._driver = None
 
@@ -719,6 +938,67 @@ class Firefox(object):
                 self._BROWSERS.pop(self._address, None)
             self._initialized = False
 
+    def _detach_on_exit(self):
+        """在解释器退出时仅断开当前连接，不主动关闭浏览器进程。
+
+        该路径适用于：
+            - ``close_on_exit(False)``
+            - ``existing_only(True)`` 接管的外部浏览器
+        """
+        if not self._driver:
+            return
+        self._driver.mark_closing()
+        try:
+            self._teardown_proxy_auth()
+        except Exception:
+            pass
+        if self._owns_session:
+            try:
+                bidi_session.end(self._driver)
+            except Exception:
+                pass
+            self._owns_session = False
+        try:
+            self._driver.stop()
+        except Exception:
+            pass
+        self._driver = None
+
+    def _should_close_browser_on_exit(self):
+        """判断解释器退出时是否应执行完整浏览器关闭。
+
+        设计原则：
+            - 默认随 Python 程序退出而关闭浏览器，符合脚本型使用场景。
+            - 对 ``existing_only(True)`` 接管的外部浏览器，始终只断开连接，
+              避免误关用户手动打开的浏览器进程。
+        """
+        if not self._driver:
+            return False
+        if not getattr(self._options, "close_on_exit_enabled", True):
+            return False
+        if getattr(self._options, "is_existing_only", False):
+            return False
+        return True
+
+    def _register_exit_cleanup(self):
+        if self._atexit_registered:
+            return
+        atexit.register(self._cleanup_on_exit)
+        self._atexit_registered = True
+
+    def _cleanup_on_exit(self):
+        if not self._driver:
+            return
+
+        if self._should_close_browser_on_exit():
+            try:
+                self.quit(timeout=3, force=True)
+            except Exception:
+                self._detach_on_exit()
+            return
+
+        self._detach_on_exit()
+
     def reconnect(self):
         """重新连接"""
         if self._driver:
@@ -729,6 +1009,10 @@ class Firefox(object):
         ws_url = get_bidi_ws_url(host, int(port_str), timeout=5)
         self._driver.start(ws_url)
         self._create_session()
+        if not self._session_id:
+            raise BrowserConnectError(
+                "无法在 {} 上创建可用的 WebDriver 会话".format(self._address)
+            )
         self._subscribe_events()
         self._setup_proxy_auth()
         self._refresh_tabs()
@@ -737,30 +1021,29 @@ class Firefox(object):
         """连接已有浏览器或启动新的"""
         # 尝试自动端口
         if self._options.auto_port:
-            port = self._find_free_port()
-            self._options.set_port(port)
-            self._address = self._options.address
+            with self._launch_lock:
+                port = self._find_free_port()
+                self._set_launch_port(port)
 
-        # 先尝试连接
-        try:
-            if self._try_connect():
-                return
-        except BrowserConnectError as e:
-            if "__stuck_session__" in str(e):
-                # 仅在现有会话确实不可接管时，才回退到重启清理。
-                logger.warning("检测到不可接管的 Firefox 会话，尝试重启浏览器...")
-                self._restart_firefox_for_stuck_session()
-                # 重启后重新连接
-                for i in range(self._options.retry_times + 1):
-                    try:
-                        if self._try_connect():
-                            return
-                    except BrowserConnectError:
-                        pass
-                    time.sleep(self._options.retry_interval)
-
-        # 仅连接模式
         if self._options.is_existing_only:
+            # attach()/FirefoxPage('host:port') 这类显式接管场景才复用已有浏览器。
+            try:
+                if self._try_connect():
+                    return
+            except BrowserConnectError as e:
+                if "__stuck_session__" in str(e):
+                    # 仅在现有会话确实不可接管时，才回退到重启清理。
+                    logger.warning("检测到不可接管的 Firefox 会话，尝试重启浏览器...")
+                    self._restart_firefox_for_stuck_session()
+                    # 重启后重新连接
+                    for i in range(self._options.retry_times + 1):
+                        try:
+                            if self._try_connect():
+                                return
+                        except BrowserConnectError:
+                            pass
+                        time.sleep(self._options.retry_interval)
+
             raise BrowserConnectError(
                 "无法连接到 {}，请先启动 Firefox：\n"
                 "  firefox.exe --remote-debugging-port={}".format(
@@ -768,10 +1051,13 @@ class Firefox(object):
                 )
             )
 
-        self._ensure_launch_port_available()
-
-        # 启动浏览器
-        self._launch_browser()
+        # launch()/FirefoxPage(opts) 场景应始终按当前 options 启动新实例，
+        # 避免复用已存在的普通窗口，导致 private/user_dir/headless 等参数失效。
+        # 这里用类级启动锁把“端口探测 -> 真正启动进程”串成原子区间，
+        # 避免并发 launch 时多个实例同时抢占同一端口。
+        with self._launch_lock:
+            self._ensure_launch_port_available()
+            self._launch_browser()
 
         # 等待连接
         for i in range(self._options.retry_times + 1):
@@ -795,7 +1081,9 @@ class Firefox(object):
                 pass
             self._process = None
 
-            self._launch_browser()
+            with self._launch_lock:
+                self._ensure_launch_port_available()
+                self._launch_browser()
             for i in range(self._options.retry_times + 1):
                 try:
                     if self._try_connect():
@@ -807,6 +1095,53 @@ class Firefox(object):
         raise BrowserConnectError(
             "启动后无法连接到 {}，请检查 Firefox 是否正常启动".format(self._address)
         )
+
+    def _kill_firefox_by_port(self, port):
+        """通过 /proc 找到监听指定端口的进程并终止，避免误杀无关 Firefox。"""
+        import signal
+
+        target_port_hex = format(port, "X").upper()
+        target_inode = None
+
+        for tcp_file in ("/proc/net/tcp", "/proc/net/tcp6"):
+            try:
+                with open(tcp_file, "r") as f:
+                    for line in f:
+                        parts = line.strip().split()
+                        if len(parts) < 10 or parts[3] != "0A":
+                            continue
+                        _, port_hex = parts[1].rsplit(":", 1)
+                        if port_hex.upper() == target_port_hex:
+                            target_inode = parts[9]
+                            break
+            except (OSError, PermissionError):
+                continue
+            if target_inode:
+                break
+
+        if not target_inode:
+            return
+
+        for entry in os.listdir("/proc"):
+            if not entry.isdigit():
+                continue
+            fd_dir = "/proc/{}/fd".format(entry)
+            try:
+                for fd_name in os.listdir(fd_dir):
+                    try:
+                        link = os.readlink(os.path.join(fd_dir, fd_name))
+                    except (OSError, PermissionError):
+                        continue
+                    if link == "socket:[{}]".format(target_inode):
+                        pid = int(entry)
+                        logger.debug("找到端口 %d 的 Firefox 进程 PID=%d，正在终止", port, pid)
+                        try:
+                            os.kill(pid, signal.SIGKILL)
+                        except ProcessLookupError:
+                            pass
+                        return
+            except (OSError, PermissionError):
+                continue
 
     def _restart_firefox_for_stuck_session(self):
         """重启 Firefox 以清理孤儿 BiDi session"""
@@ -828,7 +1163,7 @@ class Firefox(object):
             elif sys.platform == "win32":
                 os.system("taskkill /f /im firefox.exe >nul 2>&1")
             else:
-                os.system("pkill -f firefox")
+                self._kill_firefox_by_port(self._options.port)
         except Exception:
             pass
 
@@ -848,15 +1183,9 @@ class Firefox(object):
 
     def _is_port_open(self):
         """检查端口是否可达"""
+        from .._functions.tools import is_port_open
         host, port_str = self._address.rsplit(":", 1)
-        try:
-            sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-            sock.settimeout(2)
-            sock.connect((host, int(port_str)))
-            sock.close()
-            return True
-        except Exception:
-            return False
+        return is_port_open(host, int(port_str), timeout=2)
 
     def _ensure_launch_port_available(self):
         """启动前确保目标端口未被其他进程占用。"""
@@ -868,14 +1197,12 @@ class Firefox(object):
 
         old_port = self._options.port
         new_port = self._find_free_port(start=old_port + 1)
-        self._options.set_port(new_port)
-        self._address = self._options.address
+        self._set_launch_port(new_port)
 
         message = "检测到端口 {} 已被占用，ruyiPage 已自动切换到可用端口 {}".format(
             old_port, new_port
         )
         logger.warning(message)
-        print(message)
 
     def _try_connect(self):
         """尝试连接到已有浏览器
@@ -888,11 +1215,10 @@ class Firefox(object):
         # 先检查端口是否可达
         host, port = self._address.rsplit(":", 1)
         try:
-            sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-            sock.settimeout(2)
-            sock.connect((host, int(port)))
-            sock.close()
-        except Exception:
+            with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
+                sock.settimeout(2)
+                sock.connect((host, int(port)))
+        except (ConnectionRefusedError, socket.timeout, OSError):
             return False
 
         try:
@@ -905,6 +1231,7 @@ class Firefox(object):
             self._setup_proxy_auth()
             self._setup_download_behavior()
             self._refresh_tabs()
+            self._release_reserved_port()
             logger.info("已连接到 Firefox: %s", self._address)
             return True
         except BrowserConnectError:
@@ -916,6 +1243,7 @@ class Firefox(object):
                     with BrowserBiDiDriver._lock:
                         BrowserBiDiDriver._BROWSERS.pop(self._address, None)
                 self._driver = None
+            self._release_reserved_port()
             raise
         except Exception as e:
             logger.debug("连接失败: %s", e)
@@ -930,6 +1258,7 @@ class Firefox(object):
                     with BrowserBiDiDriver._lock:
                         BrowserBiDiDriver._BROWSERS.pop(self._address, None)
                 self._driver = None
+            self._release_reserved_port()
             return False
 
     def _setup_proxy_auth(self):
@@ -937,6 +1266,9 @@ class Firefox(object):
         self._teardown_proxy_auth()
 
         if not self._driver:
+            return
+
+        if not self._session_id:
             return
 
         if not self._options.proxy:
@@ -1035,13 +1367,37 @@ class Firefox(object):
 
         try:
             # 在 Windows 上使用 CREATE_NO_WINDOW 避免弹出控制台
+            # CREATE_BREAKAWAY_FROM_JOB 使 Firefox 脱离 Python 的 Job Object，
+            # 避免 IDE 调试器停止时连带杀死浏览器进程
             kwargs = {}
             if sys.platform == "win32":
-                kwargs["creationflags"] = 0x08000000  # CREATE_NO_WINDOW
-
-            self._process = subprocess.Popen(
-                cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, **kwargs
-            )
+                CREATE_NO_WINDOW = 0x08000000
+                CREATE_BREAKAWAY_FROM_JOB = 0x01000000
+                flags = CREATE_NO_WINDOW | CREATE_BREAKAWAY_FROM_JOB
+                try:
+                    self._process = subprocess.Popen(
+                        cmd,
+                        stdout=subprocess.DEVNULL,
+                        stderr=subprocess.DEVNULL,
+                        creationflags=flags,
+                    )
+                except OSError:
+                    # 某些受限环境不允许 BREAKAWAY_FROM_JOB，回退
+                    self._process = subprocess.Popen(
+                        cmd,
+                        stdout=subprocess.DEVNULL,
+                        stderr=subprocess.DEVNULL,
+                        creationflags=CREATE_NO_WINDOW,
+                    )
+            else:
+                # Unix/macOS: start_new_session 使 Firefox 脱离 Python 的进程组，
+                # 避免 IDE 调试器停止时连带杀死浏览器进程
+                self._process = subprocess.Popen(
+                    cmd,
+                    stdout=subprocess.DEVNULL,
+                    stderr=subprocess.DEVNULL,
+                    start_new_session=True,
+                )
         except FileNotFoundError:
             raise BrowserLaunchError(
                 "找不到 Firefox: {}\n"
@@ -1061,14 +1417,16 @@ class Firefox(object):
         处理各种 Firefox BiDi session 状态：
         1. 无活跃 session → session.new 成功
         2. 当前连接已有 session → session.end + session.new
-        3. 另一个连接已持有 session → 优先接管当前会话，失败时再回退重启
+        3. 另一个连接已持有 session（如调试器强杀后的孤儿 session）
+           → 断开重连让 Firefox 回收孤儿 session，再创建新 session
         """
         # 先检查状态
         try:
             status = bidi_session.status(self._driver)
             ready = status.get("ready", True)
             msg = status.get("message", "")
-        except Exception:
+        except Exception as e:
+            logger.debug("获取会话状态失败，默认 ready=True: %s", e)
             ready = True
             msg = ""
 
@@ -1082,6 +1440,7 @@ class Firefox(object):
                 )
                 self._session_id = result.get("sessionId", "")
                 self._driver.session_id = self._session_id
+                self._owns_session = True
                 logger.info("BiDi 会话已创建: %s", self._session_id)
                 return
             except Exception as e:
@@ -1094,7 +1453,7 @@ class Firefox(object):
             # 尝试 session.end + session.new
             try:
                 bidi_session.end(self._driver)
-                logger.debug("已结果旧会话")
+                logger.debug("已结束旧会话")
             except Exception:
                 pass
 
@@ -1106,24 +1465,101 @@ class Firefox(object):
                 )
                 self._session_id = result.get("sessionId", "")
                 self._driver.session_id = self._session_id
+                self._owns_session = True
                 logger.info("BiDi 会话已重新创建: %s", self._session_id)
                 return
             except Exception as e:
                 err_str = str(e).lower()
-                if "maximum" in err_str or "session not created" in err_str:
-                    # Firefox 已存在活跃 BiDi 会话时，优先直接接管当前会话，
-                    # 避免把可复用的浏览器误判成必须重启的孤儿会话。
-                    self._session_id = ""
-                    self._driver.session_id = ""
-                    logger.info("检测到已有 Firefox BiDi 会话，直接接管当前浏览器")
-                    return
-                raise
+                if "maximum" not in err_str and "session not created" not in err_str:
+                    raise
+
+            # session.new 失败，可能是调试器强杀后残留的孤儿 session。
+            # 断开 WebSocket 让 Firefox Remote Agent 回收孤儿 session，
+            # 然后重新连接并创建新 session。
+            logger.debug("检测到可能的孤儿 session，断开重连以触发 Firefox 清理...")
+            self._driver.stop()
+            self._driver = None
+
+            host, port_str = self._address.rsplit(":", 1)
+            for retry in range(6):
+                time.sleep(1)
+                try:
+                    ws_url = get_bidi_ws_url(host, int(port_str), timeout=5)
+                    self._driver = BrowserBiDiDriver(self._address)
+                    self._driver.start(ws_url)
+
+                    # 先尝试 end 再 new
+                    try:
+                        bidi_session.end(self._driver)
+                    except Exception:
+                        pass
+
+                    status = bidi_session.status(self._driver)
+                    if status.get("ready", False):
+                        result = bidi_session.new(
+                            self._driver,
+                            {},
+                            user_prompt_handler=self._options.user_prompt_handler,
+                        )
+                        self._session_id = result.get("sessionId", "")
+                        self._driver.session_id = self._session_id
+                        self._owns_session = True
+                        logger.info(
+                            "孤儿 session 已清理，新会话已创建: %s",
+                            self._session_id,
+                        )
+                        return
+                    else:
+                        # 仍然 not ready，断开再试
+                        logger.debug("重试 %d: session 仍未就绪", retry + 1)
+                        self._driver.stop()
+                        self._driver = None
+                except Exception as ex:
+                    logger.debug("重连重试 %d 失败: %s", retry + 1, ex)
+                    if self._driver:
+                        try:
+                            self._driver.stop()
+                        except Exception:
+                            with BrowserBiDiDriver._lock:
+                                BrowserBiDiDriver._BROWSERS.pop(self._address, None)
+                        self._driver = None
+
+            # 最后的兜底：发送 browser.close 让 Firefox 重启自身，
+            # 清理不可回收的孤儿 session
+            logger.warning(
+                "无法回收孤儿 session，尝试通过 browser.close 重置 Firefox..."
+            )
+            try:
+                ws_url = get_bidi_ws_url(host, int(port_str), timeout=5)
+                self._driver = BrowserBiDiDriver(self._address)
+                self._driver.start(ws_url)
+                self._driver.run("browser.close", timeout=3)
+            except Exception:
+                pass
+            finally:
+                if self._driver:
+                    try:
+                        self._driver.stop()
+                    except Exception:
+                        with BrowserBiDiDriver._lock:
+                            BrowserBiDiDriver._BROWSERS.pop(self._address, None)
+                    self._driver = None
+
+            raise BrowserConnectError(
+                "检测到 Firefox 残留的孤儿会话（通常由调试器强制停止导致），"
+                "已尝试重置浏览器。请稍等几秒后重试连接，"
+                "或手动重启浏览器的远程调试端口。\n"
+                "提示：正常停止调试（而非强制终止）可避免此问题。"
+            )
 
     def _subscribe_events(self):
         """订阅关键事件
 
         包括导航相关的 navigationStarted 和 navigationFailed 事件。
         """
+        if not self._driver:
+            return
+
         try:
             bidi_session.subscribe(
                 self._driver,
@@ -1207,6 +1643,8 @@ class Firefox(object):
                 self._context_ids.remove(ctx_id)
                 self._contexts.pop(ctx_id, None)
                 self._xpath_picker_last_reinject.pop(ctx_id, None)
+                with self._context_nav_locks_lock:
+                    self._context_nav_locks.pop(ctx_id, None)
             logger.debug("标签页关闭: %s", ctx_id)
 
     def _on_navigation_event(self, params):
@@ -1246,8 +1684,8 @@ class Firefox(object):
         try:
             if getattr(self._options, "xpath_picker_enabled", False):
                 tab._reinject_xpath_picker_if_needed()
-        except Exception:
-            pass
+        except Exception as e:
+            logger.debug("XPath picker 初始注入失败: %s", e)
         return tab
 
     def _find_free_port(self, start=None):
@@ -1261,11 +1699,12 @@ class Firefox(object):
                 start = self._options.auto_port
 
         for port in range(start, start + 100):
+            if port in self._RESERVED_PORTS:
+                continue
             try:
-                sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-                sock.bind(("127.0.0.1", port))
-                sock.close()
-                return port
+                with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
+                    sock.bind(("127.0.0.1", port))
+                    return port
             except OSError:
                 continue
 

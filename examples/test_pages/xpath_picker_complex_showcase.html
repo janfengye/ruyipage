@@ -115,6 +115,162 @@
             border: 1px solid rgba(226, 232, 240, 0.86);
             margin-bottom: 12px;
         }
+        .card-grid {
+            display: grid;
+            grid-template-columns: repeat(3, minmax(0, 1fr));
+            gap: 12px;
+        }
+        .capture-card {
+            padding: 16px;
+            border-radius: 18px;
+            background: linear-gradient(180deg, rgba(255,255,255,0.94), rgba(248,250,252,0.84));
+            border: 1px solid rgba(191, 219, 254, 0.72);
+            box-shadow: 0 12px 24px rgba(37, 99, 235, 0.08);
+        }
+        .capture-card h3 {
+            margin: 0 0 8px;
+            font-size: 16px;
+        }
+        .capture-card p {
+            margin: 0 0 10px;
+            color: #475569;
+            line-height: 1.6;
+        }
+        .capture-card .meta {
+            font-size: 12px;
+            color: #1d4ed8;
+            font-weight: 700;
+        }
+        .validation-lab {
+            display: grid;
+            grid-template-columns: repeat(2, minmax(0, 1fr));
+            gap: 12px;
+        }
+        .validation-box {
+            padding: 16px;
+            border-radius: 18px;
+            border: 1px solid rgba(148, 163, 184, 0.18);
+            background: rgba(255,255,255,0.86);
+        }
+        .validation-box b {
+            display: block;
+            margin-bottom: 8px;
+        }
+        .list-shell {
+            display: grid;
+            gap: 10px;
+        }
+        .list-row {
+            display: grid;
+            grid-template-columns: 1fr auto;
+            gap: 10px;
+            align-items: center;
+            padding: 14px 16px;
+            border-radius: 16px;
+            background: rgba(255,255,255,0.88);
+            border: 1px solid rgba(191, 219, 254, 0.64);
+        }
+        .list-row .title {
+            font-weight: 800;
+            color: #0f172a;
+        }
+        .list-row .desc {
+            margin-top: 4px;
+            color: #475569;
+            font-size: 13px;
+        }
+        .list-row .status {
+            padding: 6px 10px;
+            border-radius: 999px;
+            background: rgba(37, 99, 235, 0.10);
+            color: #1d4ed8;
+            font-size: 12px;
+            font-weight: 800;
+        }
+        .feed-shell {
+            display: grid;
+            gap: 12px;
+            margin-top: 14px;
+        }
+        .feed-item {
+            display: grid;
+            grid-template-columns: 72px 1fr;
+            gap: 14px;
+            align-items: start;
+            padding: 16px;
+            border-radius: 18px;
+            background: rgba(255,255,255,0.88);
+            border: 1px solid rgba(148, 163, 184, 0.22);
+        }
+        .feed-item .avatar {
+            width: 72px;
+            height: 72px;
+            border-radius: 20px;
+            background: linear-gradient(135deg, #1d4ed8, #7c3aed);
+        }
+        .feed-item .headline {
+            font-weight: 800;
+            color: #0f172a;
+        }
+        .feed-item .summary {
+            margin-top: 6px;
+            color: #475569;
+            line-height: 1.7;
+        }
+        .structure-shell {
+            display: grid;
+            gap: 12px;
+            margin-top: 14px;
+        }
+        .structure-shell > section {
+            display: grid;
+            grid-template-columns: 1fr auto;
+            gap: 12px;
+            align-items: center;
+            padding: 16px 18px;
+            border-radius: 18px;
+            background: rgba(255,255,255,0.9);
+            border: 1px solid rgba(226, 232, 240, 0.92);
+        }
+        .structure-shell > section > div > strong {
+            display: block;
+            margin-bottom: 6px;
+        }
+        .structure-shell > section > span {
+            padding: 6px 10px;
+            border-radius: 999px;
+            background: rgba(15, 23, 42, 0.06);
+            color: #334155;
+            font-size: 12px;
+            font-weight: 800;
+        }
+        .table-lab {
+            margin-top: 14px;
+            overflow: hidden;
+            border-radius: 18px;
+            border: 1px solid rgba(226, 232, 240, 0.92);
+            background: rgba(255,255,255,0.92);
+        }
+        .table-lab table {
+            margin: 0;
+        }
+        .table-lab tbody tr {
+            background: rgba(255,255,255,0.94);
+        }
+        .table-lab .metric {
+            font-weight: 800;
+            color: #0f172a;
+        }
+        .table-lab .pill {
+            display: inline-flex;
+            align-items: center;
+            border-radius: 999px;
+            padding: 4px 10px;
+            background: rgba(16, 185, 129, 0.10);
+            color: #047857;
+            font-size: 12px;
+            font-weight: 800;
+        }
         .rich {
             min-height: 120px;
             padding: 16px;
@@ -173,12 +329,160 @@
                 <h2>建议点选顺序</h2>
                 <ol id="pick-order">
                     <li>先点主页面表单、按钮、表格、SVG</li>
+                    <li>再点“元素校验实验区”的唯一和重复目标，并点击校验</li>
+                    <li>点“元素组捕获实验区”的任一卡片，再点击“捕获相似元素”</li>
                     <li>再点主页面 open shadow / closed shadow host</li>
                     <li>然后点 outer iframe 及内部节点</li>
                     <li>最后下钻到第二层 iframe</li>
                 </ol>
-                <p id="guide-note">右下角浮窗支持收起/展开，也支持暂停/恢复选择，但会始终固定在页面右下角。</p>
+                <p id="guide-note">右下角浮窗支持收起/展开、XPath 校验、相似元素组捕获，但会始终固定在页面右下角。</p>
             </aside>
+        </section>
+
+        <section class="grid">
+            <div class="panel" id="validation-panel">
+                <h2>元素校验实验区</h2>
+                <div class="validation-lab">
+                    <div class="validation-box">
+                        <b id="unique-validation-target" data-testid="unique-validation-target">唯一稳定目标</b>
+                        <div>这个目标带唯一 `data-testid`，适合验证 relative XPath 的唯一命中效果。</div>
+                    </div>
+                    <div class="validation-box">
+                        <b class="duplicate-validation-target">重复命中目标 A</b>
+                        <div>下面两块是重复结构，适合看到“命中多个元素”的橙色高亮反馈。</div>
+                    </div>
+                    <div class="validation-box">
+                        <b class="duplicate-validation-target">重复命中目标 B</b>
+                        <div>两块结构基本相同，适合测试非唯一 XPath。</div>
+                    </div>
+                    <div class="validation-box">
+                        <b id="ancestor-relative-target">祖先相对路径目标</b>
+                        <div><span>这里没有 id/class 组合优势，更适合看祖先相对 XPath 回退策略。</span></div>
+                    </div>
+                </div>
+            </div>
+
+            <div class="panel" id="group-panel">
+                <h2>元素组捕获实验区</h2>
+                <div class="card-grid" id="group-card-grid">
+                    <article class="capture-card" data-group="product-card">
+                        <h3 class="capture-title">风控节点分析卡片</h3>
+                        <p>适合测试同级卡片批量捕获，观察共同 XPath 和 `page.eles()` 代码生成。</p>
+                        <div class="meta">Group A / Card 01</div>
+                    </article>
+                    <article class="capture-card" data-group="product-card">
+                        <h3 class="capture-title">指纹接管状态卡片</h3>
+                        <p>保持相同结构，但文本不同，方便检查组内列表展示是否清晰。</p>
+                        <div class="meta">Group A / Card 02</div>
+                    </article>
+                    <article class="capture-card" data-group="product-card">
+                        <h3 class="capture-title">自动化验证结果卡片</h3>
+                        <p>点击任一卡片后做相似元素捕获，应能捕获整组 3 张卡片。</p>
+                        <div class="meta">Group A / Card 03</div>
+                    </article>
+                </div>
+                <div class="list-shell" id="group-list-shell" style="margin-top: 14px;">
+                    <div class="list-row" data-list="stable-row">
+                        <div>
+                            <div class="title">稳定容器列表项 01</div>
+                            <div class="desc">这一组比卡片更接近真实列表/表格行结构，适合验证稳定组定位生成。</div>
+                        </div>
+                        <div class="status">Ready</div>
+                    </div>
+                    <div class="list-row" data-list="stable-row">
+                        <div>
+                            <div class="title">稳定容器列表项 02</div>
+                            <div class="desc">使用统一容器、统一类名和统一层级，方便公共 XPath/CSS 收敛。</div>
+                        </div>
+                        <div class="status">Ready</div>
+                    </div>
+                    <div class="list-row" data-list="stable-row">
+                        <div>
+                            <div class="title">稳定容器列表项 03</div>
+                            <div class="desc">建议点整行或行内标题，再测试“捕获相似元素”。</div>
+                        </div>
+                        <div class="status">Ready</div>
+                    </div>
+                </div>
+                <div class="feed-shell" id="group-feed-shell">
+                    <div class="feed-item feature-card">
+                        <div class="avatar"></div>
+                        <div>
+                            <div class="headline">仅靠 class 的资讯卡片 01</div>
+                            <div class="summary">这一组没有 data-group，只保留共同 class 和共同父级，适合测试 class 收敛。</div>
+                        </div>
+                    </div>
+                    <div class="feed-item feature-card">
+                        <div class="avatar"></div>
+                        <div>
+                            <div class="headline">仅靠 class 的资讯卡片 02</div>
+                            <div class="summary">点击 headline、summary 或 avatar，都应该最终收敛到整张 feed item。</div>
+                        </div>
+                    </div>
+                    <div class="feed-item feature-card">
+                        <div class="avatar"></div>
+                        <div>
+                            <div class="headline">仅靠 class 的资讯卡片 03</div>
+                            <div class="summary">如果公共组定位还能生成，说明 class-only 场景已经基本可用。</div>
+                        </div>
+                    </div>
+                </div>
+                <div class="structure-shell" id="group-structure-shell">
+                    <section>
+                        <div>
+                            <strong>仅靠结构归纳 01</strong>
+                            <small>这一组容器没有 class、没有 data-*，只保留重复层级结构。</small>
+                        </div>
+                        <span>Queued</span>
+                    </section>
+                    <section>
+                        <div>
+                            <strong>仅靠结构归纳 02</strong>
+                            <small>用于测试 anchor 提升后，能不能只凭共同父级和 tag 定位稳定组。</small>
+                        </div>
+                        <span>Queued</span>
+                    </section>
+                    <section>
+                        <div>
+                            <strong>仅靠结构归纳 03</strong>
+                            <small>建议点 strong、small 或右侧状态标签，再测试元素组捕获。</small>
+                        </div>
+                        <span>Queued</span>
+                    </section>
+                </div>
+                <div class="table-lab" id="group-table-shell">
+                    <table>
+                        <thead>
+                            <tr>
+                                <th>Campaign</th>
+                                <th>Owner</th>
+                                <th>Metric</th>
+                                <th>Status</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            <tr>
+                                <td><span>表格行样本 01</span></td>
+                                <td><span>Ada</span></td>
+                                <td><span class="metric">42%</span></td>
+                                <td><span class="pill">Healthy</span></td>
+                            </tr>
+                            <tr>
+                                <td><span>表格行样本 02</span></td>
+                                <td><span>Lin</span></td>
+                                <td><span class="metric">57%</span></td>
+                                <td><span class="pill">Healthy</span></td>
+                            </tr>
+                            <tr>
+                                <td><span>表格行样本 03</span></td>
+                                <td><span>Mia</span></td>
+                                <td><span class="metric">61%</span></td>
+                                <td><span class="pill">Healthy</span></td>
+                            </tr>
+                        </tbody>
+                    </table>
+                </div>
+            </div>
         </section>
 
         <section class="grid">

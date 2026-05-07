@@ -12,6 +12,7 @@ from typing import TYPE_CHECKING
 from .._base.base import BaseElement
 from .._functions.bidi_values import parse_value, make_shared_ref
 from .._functions.keys import Keys
+from .._functions.sleep import sleep as _sleep
 from .._bidi import script as bidi_script
 from ..errors import (
     ElementLostError,
@@ -456,7 +457,7 @@ class FirefoxElement(BaseElement):
         else:
             # 优先使用原生 BiDi 滚轮将元素带入视口，避免生成非原生点击事件
             self._owner.scroll.to_see(self, center=True)
-            time.sleep(0.1)
+            _sleep(0.1)
             pos = self._run_safe("""(el) => {
                 const r = el.getBoundingClientRect();
                 return {x: Math.round(r.x + r.width / 2), y: Math.round(r.y + r.height / 2)};
@@ -486,6 +487,26 @@ class FirefoxElement(BaseElement):
                     ],
                 },
             )
+
+            # 行为可视化
+            try:
+                browser = getattr(self._owner, "_browser", None)
+                options = getattr(browser, "options", None)
+                if getattr(options, "action_visual_enabled", False):
+                    self._owner.run_js(
+                        "if(window.__ruyiAV){window.__ruyiAV.moves([["
+                        + str(x)
+                        + ","
+                        + str(y)
+                        + "]]);window.__ruyiAV.click("
+                        + str(x)
+                        + ","
+                        + str(y)
+                        + ",0)}",
+                        as_expr=True,
+                    )
+            except Exception:
+                pass
 
         return self
 
@@ -533,6 +554,34 @@ class FirefoxElement(BaseElement):
             return self
 
         if by_js:
+            try:
+                browser = getattr(self._owner, "_browser", None)
+                options = getattr(browser, "options", None)
+                if getattr(options, "action_visual_enabled", False):
+                    loc = self.location
+                    size = self.size
+                    rect = {
+                        "x": int(loc.get("x", 0)),
+                        "y": int(loc.get("y", 0)),
+                        "width": int(size.get("width", 0)),
+                        "height": int(size.get("height", 0)),
+                    }
+                    center = self._get_center() or {"x": 0, "y": 0}
+                    import json
+
+                    self._owner.run_js(
+                        "if(window.__ruyiAV){window.__ruyiAV.moves([[{x},{y}]]);window.__ruyiAV.click({x},{y},0);window.__ruyiAV.highlight({rect},{label})}".format(
+                            x=int(center.get("x", 0)),
+                            y=int(center.get("y", 0)),
+                            rect=json.dumps(rect),
+                            label=json.dumps(
+                                "{} input[js]".format(self.tag or "element")
+                            ),
+                        ),
+                        as_expr=True,
+                    )
+            except Exception:
+                pass
             if clear:
                 self._run_safe('(el) => { el.value = ""; }')
             self._run_safe(
@@ -606,7 +655,7 @@ class FirefoxElement(BaseElement):
         self._run_safe(
             '(el) => el.scrollIntoView({block: "center", inline: "nearest"})'
         )
-        time.sleep(0.1)
+        _sleep(0.1)
         pos = self._get_center()
         if pos:
             self._owner._driver._browser_driver.run(
@@ -712,8 +761,8 @@ class FirefoxElement(BaseElement):
                 target_elem._run_safe(
                     '(el) => el.scrollIntoView({block: "center", inline: "nearest"})'
                 )
-            except Exception:
-                pass
+            except Exception as e:
+                logger.debug("拖拽前预滚动失败: %s", e)
 
             start = self._get_center()
             end = target_elem._get_center()
@@ -1110,7 +1159,7 @@ class FirefoxElement(BaseElement):
                 return elements
             if time.time() >= end_time:
                 break
-            time.sleep(0.3)
+            _sleep(0.3)
 
         return []
 

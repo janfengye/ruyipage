@@ -13,7 +13,6 @@ Firefox Remote Agent 通过 --remote-debugging-port 暴露两个端点：
 """
 
 import json
-import socket
 import subprocess
 import time
 import logging
@@ -41,28 +40,7 @@ def _probe_ws_url(ws_url, timeout=3):
                 pass
 
 
-def find_free_port(start=9222, end=9322):
-    """在 [start, end) 范围内找一个空闲端口"""
-    for port in range(start, end):
-        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
-            s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-            try:
-                s.bind(("127.0.0.1", port))
-                return port
-            except OSError:
-                continue
-    raise RuntimeError("找不到空闲端口 [{}, {})".format(start, end))
-
-
-def is_port_open(host, port, timeout=1.0):
-    """检测端口是否可连接"""
-    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
-        s.settimeout(timeout)
-        try:
-            s.connect((host, port))
-            return True
-        except (ConnectionRefusedError, socket.timeout, OSError):
-            return False
+from .._functions.tools import find_free_port, is_port_open  # noqa: F401
 
 
 def get_bidi_ws_url(host, port, timeout=30):
@@ -156,9 +134,20 @@ def launch_firefox(cmd, env=None):
     if env:
         kwargs["env"] = env
 
-    # Windows 下隐藏控制台窗口
+    # Windows: 隐藏控制台窗口 + 脱离 Job Object（避免调试器停止时连带杀死浏览器）
     if hasattr(subprocess, "CREATE_NO_WINDOW"):
-        kwargs["creationflags"] = subprocess.CREATE_NO_WINDOW
+        CREATE_BREAKAWAY_FROM_JOB = 0x01000000
+        kwargs["creationflags"] = subprocess.CREATE_NO_WINDOW | CREATE_BREAKAWAY_FROM_JOB
+    else:
+        # Unix/macOS: 脱离进程组
+        kwargs["start_new_session"] = True
 
     logger.debug("启动 Firefox: %s", " ".join(cmd))
-    return subprocess.Popen(cmd, **kwargs)
+    try:
+        return subprocess.Popen(cmd, **kwargs)
+    except OSError:
+        # 某些受限环境不允许 BREAKAWAY_FROM_JOB，回退
+        if "creationflags" in kwargs:
+            kwargs["creationflags"] = subprocess.CREATE_NO_WINDOW
+            return subprocess.Popen(cmd, **kwargs)
+        raise

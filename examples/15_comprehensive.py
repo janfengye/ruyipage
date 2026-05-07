@@ -11,13 +11,16 @@
 import os
 import sys
 import io
+from pathlib import Path
 
 # 设置控制台输出编码为UTF-8（Windows兼容）
 if sys.platform == "win32":
     sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding="utf-8")
     sys.stderr = io.TextIOWrapper(sys.stderr.buffer, encoding="utf-8")
 
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
+BASE_DIR = Path(__file__).resolve().parent
+
+sys.path.insert(0, str(BASE_DIR.parent))
 
 from ruyipage import FirefoxPage, FirefoxOptions
 
@@ -29,15 +32,14 @@ def test_comprehensive():
     print("=" * 60)
 
     opts = FirefoxOptions()
+    opts.enable_action_visual(True)
     opts.headless(False)
     page = FirefoxPage(opts)
 
     try:
         # 加载测试页面
-        test_page = os.path.join(
-            os.path.dirname(__file__), "test_pages", "test_page.html"
-        )
-        test_url = "file:///" + os.path.abspath(test_page).replace("\\", "/")
+        test_page = BASE_DIR / "test_pages" / "test_page.html"
+        test_url = test_page.resolve().as_uri()
         page.get(test_url)
         page.wait(1)
 
@@ -122,15 +124,15 @@ def test_comprehensive():
 
         # 10. 截取关键区域
         print("1. 截取关键区域...")
-        output_dir = os.path.join(os.path.dirname(__file__), "output", "comprehensive")
-        os.makedirs(output_dir, exist_ok=True)
+        output_dir = BASE_DIR / "output" / "comprehensive"
+        output_dir.mkdir(parents=True, exist_ok=True)
 
         # 表单区域截图
         try:
             form_section = page.ele("#form-section")
             page.scroll.to_see(form_section)
             page.wait(0.5)
-            form_section.screenshot(os.path.join(output_dir, "form_filled.png"))
+            form_section.screenshot(str(output_dir / "form_filled.png"))
             print(f"   ✓ 表单截图已保存")
         except Exception as e:
             print(f"   ⚠ 表单截图跳过: {str(e)[:50]}")
@@ -140,13 +142,13 @@ def test_comprehensive():
             table = page.ele("#data-table")
             page.scroll.to_see(table)
             page.wait(0.5)
-            table.screenshot(os.path.join(output_dir, "table_data.png"))
+            table.screenshot(str(output_dir / "table_data.png"))
             print(f"   ✓ 表格截图已保存")
         except Exception as e:
             print(f"   ⚠ 表格截图跳过: {str(e)[:50]}")
 
         # 整页截图
-        page.screenshot(os.path.join(output_dir, "full_page.png"))
+        page.screenshot(str(output_dir / "full_page.png"))
         print(f"   ✓ 整页截图已保存")
 
         print("\n场景5: 多次交互")

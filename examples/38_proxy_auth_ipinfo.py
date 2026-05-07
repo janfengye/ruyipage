@@ -6,14 +6,6 @@
 - 通过 set_proxy() 配置 HTTP 代理地址
 - 通过 set_fpfile() 让内核自动读取 httpauth.username/password
 - 访问 http://ipinfo.io/json 并打印返回内容
-
-fpfile 示例内容：
-    httpauth.username:your-proxy-username
-    httpauth.password:your-proxy-password
-
-说明：
-- 该示例依赖外部代理服务可用
-- 若代理失效、网络受限或目标站点不可访问，示例会失败
 """
 
 import json
@@ -28,7 +20,9 @@ from ruyipage import FirefoxOptions, FirefoxPage
 PROXY_HOST = "your-proxy-host"
 PROXY_PORT = 8080
 TARGET_URL = "http://ipinfo.io/json"
-FPFILE_PATH = r"C:\path\to\your\profile1.txt"
+FPFILE_PATH = r"C:\Program Files\Mozilla Firefox\profile1.txt"
+BROWSER_PATH = r"C:\Program Files\Mozilla Firefox\firefox.exe"
+HEADLESS = False
 
 
 def main():
@@ -36,49 +30,55 @@ def main():
     print("示例38: 通过 fpfile 自动处理 HTTP 代理认证")
     print("=" * 60)
 
+    if not os.path.exists(FPFILE_PATH):
+        raise FileNotFoundError("fpfile 不存在: {}".format(FPFILE_PATH))
+
+    if not os.path.exists(BROWSER_PATH):
+        raise FileNotFoundError("Firefox 不存在: {}".format(BROWSER_PATH))
+
     opts = FirefoxOptions()
-    opts.set_proxy(f"http://{PROXY_HOST}:{PROXY_PORT}")
+    opts.set_browser_path(BROWSER_PATH)
+    opts.set_proxy("http://{}:{}".format(PROXY_HOST, PROXY_PORT))
     opts.set_fpfile(FPFILE_PATH)
-    opts.headless(False)
+    opts.headless(HEADLESS)
 
     page = FirefoxPage(opts)
 
     try:
         print("\n0. 已启用代理自动认证:")
-        print(f"   代理: http://{PROXY_HOST}:{PROXY_PORT}")
+        print("   代理: http://{}:{}".format(PROXY_HOST, PROXY_PORT))
         print(f"   fpfile: {FPFILE_PATH}")
         print("   认证信息将由内核从 fpfile 自动读取")
 
         print(f"\n1. 通过代理访问: {TARGET_URL}")
         page.get(TARGET_URL)
-        page.wait(2)
+        page.wait(3)
 
+        title = page.title or ""
         print("\n2. 页面标题:")
-        print(f"   {page.title}")
+        print(f"   {title}")
 
-        print("\n3. 响应内容:")
         body_text = (
             page.run_js("return document.body ? document.body.innerText : ''") or ""
         ).strip()
+
+        print("\n3. 响应内容:")
         print(body_text)
 
         print("\n4. 解析返回内容:")
-        try:
-            data = json.loads(body_text)
-        except Exception:
-            data = _extract_ipinfo_from_text(body_text)
+        data = _extract_ipinfo_from_page(page, body_text)
 
-        if isinstance(data, dict):
-            print(f"   IP: {data.get('ip')}")
-            print(f"   城市: {data.get('city')}")
-            print(f"   地区: {data.get('region')}")
-            print(f"   国家: {data.get('country')}")
-            if data.get("status") or data.get("error") or data.get("message"):
-                print(f"   状态: {data.get('status')}")
-                print(f"   错误: {data.get('error')}")
-                print(f"   消息: {data.get('message')}")
-        else:
-            print("   返回内容不是标准 JSON，可能是目标站限流或页面被中间页接管。")
+        if not isinstance(data, dict) or not data.get("ip"):
+            raise RuntimeError("代理访问失败，未获取到有效的 ipinfo JSON 响应")
+
+        print(f"   IP: {data.get('ip')}")
+        print(f"   城市: {data.get('city')}")
+        print(f"   地区: {data.get('region')}")
+        print(f"   国家: {data.get('country')}")
+        if data.get("status") or data.get("error") or data.get("message"):
+            print(f"   状态: {data.get('status')}")
+            print(f"   错误: {data.get('error')}")
+            print(f"   消息: {data.get('message')}")
 
         print("\n" + "=" * 60)
         print("[OK] fpfile 代理认证示例执行完成")
@@ -112,17 +112,52 @@ def _extract_ipinfo_from_text(text):
         "timezone",
         "readme",
     }
-    i = 0
-    while i < len(lines) - 1:
-        key = lines[i]
-        if key in keys:
-            value = lines[i + 1].strip().strip('"')
-            fields[key] = value
-            i += 2
-            continue
-        i += 1
+
+    for line_index, line in enumerate(lines):
+        for key in keys:
+            if line == key:
+                if line_index + 1 < len(lines):
+                    fields[key] = lines[line_index + 1].strip().strip('"')
+                break
+
+            prefix = key + "\t"
+            if line.startswith(prefix):
+                fields[key] = line[len(prefix) :].strip().strip('"')
+                break
 
     return fields or None
+
+
+def _extract_ipinfo_from_page(page, body_text):
+    """兼容 ipinfo 的纯 JSON 和可视化 JSON 页面。"""
+    try:
+        data = json.loads(body_text)
+        if isinstance(data, dict):
+            return data
+    except Exception:
+        pass
+
+    data = _extract_ipinfo_from_text(body_text)
+    if isinstance(data, dict):
+        return data
+
+    try:
+        script_text = page.run_js(
+            """
+            const root = document.querySelector('body');
+            if (!root) return null;
+            return root.innerText || '';
+            """
+        )
+    except Exception:
+        script_text = None
+
+    if isinstance(script_text, str):
+        data = _extract_ipinfo_from_text(script_text)
+        if isinstance(data, dict):
+            return data
+
+    return None
 
 
 if __name__ == "__main__":

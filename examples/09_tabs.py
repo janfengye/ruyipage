@@ -12,13 +12,16 @@
 import os
 import sys
 import io
+from pathlib import Path
 
 # 设置控制台输出编码为UTF-8（Windows兼容）
 if sys.platform == "win32":
     sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding="utf-8")
     sys.stderr = io.TextIOWrapper(sys.stderr.buffer, encoding="utf-8")
 
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
+BASE_DIR = Path(__file__).resolve().parent
+
+sys.path.insert(0, str(BASE_DIR.parent))
 
 from ruyipage import FirefoxPage, FirefoxOptions
 
@@ -35,10 +38,8 @@ def test_tabs():
 
     try:
         # 加载测试页面
-        test_page = os.path.join(
-            os.path.dirname(__file__), "test_pages", "test_page.html"
-        )
-        test_url = "file:///" + os.path.abspath(test_page).replace("\\", "/")
+        test_page = BASE_DIR / "test_pages" / "test_page.html"
+        test_url = test_page.resolve().as_uri()
         page.get(test_url)
         page.wait(1)
 

@@ -10,6 +10,7 @@
 import io
 import os
 import sys
+from pathlib import Path
 
 
 if sys.platform == "win32":
@@ -17,7 +18,9 @@ if sys.platform == "win32":
     sys.stderr = io.TextIOWrapper(sys.stderr.buffer, encoding="utf-8")
 
 
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
+BASE_DIR = Path(__file__).resolve().parent
+
+sys.path.insert(0, str(BASE_DIR.parent))
 
 from ruyipage import FirefoxOptions, FirefoxPage, Keys
 
@@ -44,10 +47,8 @@ def test_native_bidi_select():
     page = FirefoxPage(opts)
 
     try:
-        test_page = os.path.join(
-            os.path.dirname(__file__), "test_pages", "native_bidi_select_test.html"
-        )
-        test_url = "file:///" + os.path.abspath(test_page).replace("\\", "/")
+        test_page = BASE_DIR / "test_pages" / "native_bidi_select_test.html"
+        test_url = test_page.resolve().as_uri()
         page.get(test_url)
         page.wait(1)
 

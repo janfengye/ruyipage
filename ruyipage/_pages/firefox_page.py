@@ -39,22 +39,29 @@ class FirefoxPage(FirefoxBase):
     _type = "FirefoxPage"
     _PAGES = {}  # 单例缓存
 
-    def __new__(cls, addr_or_opts=None):
+    @classmethod
+    def _cache_key_for(cls, addr_or_opts=None):
+        """仅对显式 attach 场景启用地址级单例缓存。"""
         if isinstance(addr_or_opts, FirefoxOptions):
-            address = addr_or_opts.address
-        elif isinstance(addr_or_opts, str):
-            address = addr_or_opts
-        elif addr_or_opts is None:
-            address = "127.0.0.1:9222"
-        else:
-            address = str(addr_or_opts)
+            if not addr_or_opts.is_existing_only:
+                return None
+            return addr_or_opts.address
 
-        # 单例
-        if address in cls._PAGES:
-            return cls._PAGES[address]
+        if isinstance(addr_or_opts, str):
+            return addr_or_opts
+
+        return None
+
+    def __new__(cls, addr_or_opts=None):
+        cache_key = cls._cache_key_for(addr_or_opts)
+
+        if cache_key is not None:
+            if cache_key in cls._PAGES:
+                return cls._PAGES[cache_key]
 
         instance = super(FirefoxPage, cls).__new__(cls)
-        cls._PAGES[address] = instance
+        if cache_key is not None:
+            cls._PAGES[cache_key] = instance
         return instance
 
     def __init__(self, addr_or_opts=None):

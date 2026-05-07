@@ -5,6 +5,11 @@ import time
 from queue import Empty, Queue
 
 from .._bidi import session as bidi_session
+from .._functions.queue_utils import queue_get as _queue_get
+
+import logging
+
+logger = logging.getLogger('ruyipage')
 
 
 class BidiEvent(object):
@@ -116,7 +121,8 @@ class EventTracker(object):
                 contexts=ctxs,
             )
             self._subscription_id = result.get("subscription")
-        except Exception:
+        except Exception as e:
+            logger.debug("订阅事件失败: %s", e)
             self._subscription_id = None
             self._events = []
             self._listening = False
@@ -176,7 +182,7 @@ class EventTracker(object):
         while time.time() < end_time:
             remaining = end_time - time.time()
             try:
-                item = self._queue.get(timeout=min(remaining, 0.2))
+                item = _queue_get(self._queue, timeout=min(remaining, 0.2))
             except Empty:
                 continue
             if event is None or item.method == event:

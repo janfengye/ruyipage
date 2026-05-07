@@ -51,6 +51,7 @@ from ._units.script_tools import (
     ScriptResult,
     PreloadScript,
 )
+from ._units.tracer import FailureSnapshot, TraceEntry
 from .errors import (
     RuyiPageError,
     ElementNotFoundError,
@@ -66,6 +67,28 @@ from .errors import (
     NoRectError,
     CanNotClickError,
     LocatorError,
+    IncorrectURLError,
+    NetworkInterceptError,
+)
+from ._fingerprint import (
+    apply_smart_fingerprint,
+    FingerprintContext,
+    fetch_geo_info,
+    fetch_public_ipv6,
+    pick_fingerprint,
+    write_fpfile,
+    build_proxies_dict,
+    list_hardware_profiles,
+    get_country_profile,
+    GeoInfo,
+    WebGLProfile,
+    HardwareProfile,
+    CountryProfile,
+    FingerprintProfile,
+    FingerprintError,
+    FingerprintConfigError,
+    GeoError,
+    CountryMismatchError,
 )
 
 
@@ -173,13 +196,18 @@ def launch(
     headless=False,
     private=False,
     xpath_picker=False,
+    action_visual=False,
     port=9222,
     browser_path=None,
     user_dir=None,
+    close_on_exit=True,
     window_size=(1280, 800),
     timeout_base=10,
     timeout_page_load=30,
     timeout_script=30,
+    trace=False,
+    failure_snapshot=False,
+    snapshot_dir=None,
 ):
     """快速启动 FirefoxPage（小白友好入口）。
 
@@ -187,15 +215,22 @@ def launch(
         headless: 是否无头
         private: 是否启用 Firefox 私密浏览模式
         xpath_picker: 是否启用页面 XPath 选择浮窗
+        action_visual: 是否启用鼠标行为可视化调试模式
         port: 远程调试端口
         browser_path: Firefox 可执行文件路径。
             适用于 Firefox 安装在非默认目录时。
         user_dir: 用户目录 / profile 目录。
             适用于希望复用登录态、Cookie、扩展时。
+        close_on_exit: Python 程序退出时是否自动关闭浏览器。
+            默认 ``True``。仅对 ruyipage 自己启动的浏览器生效；
+            attach 已有浏览器时只断开连接，不主动关闭外部进程。
         window_size: 窗口大小 (width, height)
         timeout_base: 基础超时
         timeout_page_load: 页面加载超时
         timeout_script: 脚本执行超时
+        trace: 是否启用 debug trace 记录
+        failure_snapshot: 是否启用失败自动诊断快照
+        snapshot_dir: 诊断快照保存目录
 
     Returns:
         FirefoxPage
@@ -210,10 +245,15 @@ def launch(
         headless=headless,
         private=private,
         xpath_picker=xpath_picker,
+        action_visual=action_visual,
+        close_on_exit=close_on_exit,
         window_size=window_size,
         timeout_base=timeout_base,
         timeout_page_load=timeout_page_load,
         timeout_script=timeout_script,
+        trace=trace,
+        failure_snapshot=failure_snapshot,
+        snapshot_dir=snapshot_dir,
     )
     if browser_path:
         opts.set_browser_path(browser_path)
@@ -234,6 +274,8 @@ def attach(address="127.0.0.1:9222"):
     说明:
         - 用于连接“已手动启动”的 Firefox 调试端口。
         - 内部启用 existing_only，避免重复启动浏览器进程。
+        - 即使设置了 ``close_on_exit(True)``，这里在 Python 退出时也只会
+          断开连接，不会主动关闭外部浏览器。
     """
     opts = FirefoxOptions().set_address(address).existing_only(True)
     return FirefoxPage(opts)
@@ -382,6 +424,12 @@ def auto_attach_exist_browser_by_process(
     latest_tab=False,
 ):
     """按进程特征自动探测并接管已打开浏览器。"""
+    candidate_ports = find_candidate_ports_by_process()
+    if not candidate_ports:
+        raise RuntimeError(
+            "未从进程特征中发现 Firefox 调试端口，请确认浏览器已启动并启用 --remote-debugging-port。"
+        )
+
     browsers = find_existing_browsers_by_process(
         host=host,
         timeout=timeout,
@@ -389,9 +437,35 @@ def auto_attach_exist_browser_by_process(
         keep_driver=True,
     )
     if not browsers:
-        raise RuntimeError(
-            "未从进程特征中发现可接管的 Firefox 端口，请确认浏览器已启动。"
-        )
+        occupied_infos = []
+        for port in candidate_ports:
+            info = _probe_bidi_address(
+                "{}:{}".format(host, port),
+                timeout=timeout,
+                keep_driver=False,
+            )
+            if info and info.get("probe_state") == "occupied":
+                occupied_infos.append(info)
+
+        if occupied_infos:
+            detail = "；".join(
+                "{} -> {}{}".format(
+                    item["address"],
+                    item.get("status_message") or "Session already started",
+                    (
+                        " ({})".format(item.get("error_message"))
+                        if item.get("error_message")
+                        else ""
+                    ),
+                )
+                for item in occupied_infos[:3]
+            )
+            raise RuntimeError(
+                "已发现 Firefox 调试端口，但其唯一 BiDi session 已被占用，当前无法接管。"
+                + (" 失败详情: {}".format(detail) if detail else "")
+            )
+
+        raise RuntimeError("已发现候选调试端口，但未检测到可接管的 Firefox BiDi 会话。")
 
     errors = []
     for item in browsers:
@@ -445,6 +519,8 @@ __all__ = [
     "ScriptRemoteValue",
     "ScriptResult",
     "PreloadScript",
+    "FailureSnapshot",
+    "TraceEntry",
     # 异常
     "RuyiPageError",
     "ElementNotFoundError",
@@ -460,6 +536,8 @@ __all__ = [
     "NoRectError",
     "CanNotClickError",
     "LocatorError",
+    "IncorrectURLError",
+    "NetworkInterceptError",
     # 便捷入口
     "launch",
     "attach",
@@ -468,6 +546,25 @@ __all__ = [
     "find_exist_browsers",
     "find_exist_browsers_by_process",
     "auto_attach_exist_browser_by_process",
+    # 智能指纹一站式 API
+    "apply_smart_fingerprint",
+    "FingerprintContext",
+    "fetch_geo_info",
+    "fetch_public_ipv6",
+    "pick_fingerprint",
+    "write_fpfile",
+    "build_proxies_dict",
+    "list_hardware_profiles",
+    "get_country_profile",
+    "GeoInfo",
+    "WebGLProfile",
+    "HardwareProfile",
+    "CountryProfile",
+    "FingerprintProfile",
+    "FingerprintError",
+    "FingerprintConfigError",
+    "GeoError",
+    "CountryMismatchError",
     # 版本
     "__version__",
 ]

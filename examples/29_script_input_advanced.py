@@ -5,7 +5,11 @@
 import io
 import os
 import sys
+from pathlib import Path
 from typing import Dict, List
+
+
+BASE_DIR = Path(__file__).resolve().parent
 
 if sys.platform == "win32":
     sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding="utf-8")
@@ -34,9 +38,9 @@ def main() -> None:
 
     page = FirefoxPage()
     results: List[Dict[str, str]] = []
-    html_path = os.path.join(os.path.dirname(__file__), "test_file_input.html")
-    file1 = os.path.join(os.path.dirname(__file__), "test1.txt")
-    file2 = os.path.join(os.path.dirname(__file__), "test2.txt")
+    html_path = BASE_DIR / "test_file_input.html"
+    file1 = BASE_DIR / "test1.txt"
+    file2 = BASE_DIR / "test2.txt"
 
     try:
         page.get("https://www.example.com")
@@ -118,17 +122,17 @@ def main() -> None:
         with open(file2, "w", encoding="utf-8") as f:
             f.write("Test file 2 content")
 
-        page.get(f"file:///{html_path.replace(os.sep, '/')}")
+        page.get(html_path.resolve().as_uri())
         add_result(results, "文件测试页加载", "成功", "本地 file input 页面已加载")
 
-        page.ele("#single-file").input(file1)
+        page.ele("#single-file").input(str(file1))
         single_text = page.ele("#result").text
         if "test1.txt" in single_text:
             add_result(results, "input.setFiles single", "成功", single_text)
         else:
             add_result(results, "input.setFiles single", "失败", single_text)
 
-        page.ele("#multiple-files").input([file1, file2])
+        page.ele("#multiple-files").input([str(file1), str(file2)])
         multi_text = page.ele("#result").text
         if "Multiple files: 2" in multi_text:
             add_result(results, "input.setFiles multiple", "成功", multi_text)
@@ -144,8 +148,8 @@ def main() -> None:
     finally:
         for path in (file1, file2, html_path):
             try:
-                if os.path.exists(path):
-                    os.remove(path)
+                if path.exists():
+                    path.unlink()
             except Exception:
                 pass
         try:

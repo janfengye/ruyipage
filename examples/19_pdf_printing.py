@@ -4,6 +4,7 @@
 import io
 import os
 import sys
+from pathlib import Path
 
 
 if sys.platform == "win32":
@@ -11,7 +12,9 @@ if sys.platform == "win32":
     sys.stderr = io.TextIOWrapper(sys.stderr.buffer, encoding="utf-8")
 
 
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
+BASE_DIR = Path(__file__).resolve().parent
+
+sys.path.insert(0, str(BASE_DIR.parent))
 
 from ruyipage import FirefoxOptions, FirefoxPage
 
@@ -30,27 +33,25 @@ def test_pdf_printing():
     page = FirefoxPage(opts)
 
     try:
-        test_page = os.path.join(
-            os.path.dirname(__file__), "test_pages", "test_page.html"
-        )
-        test_url = "file:///" + os.path.abspath(test_page).replace("\\", "/")
+        test_page = BASE_DIR / "test_pages" / "test_page.html"
+        test_url = test_page.resolve().as_uri()
         page.get(test_url)
         page.wait(1)
 
-        output_dir = os.path.join(os.path.dirname(__file__), "output", "pdf")
-        os.makedirs(output_dir, exist_ok=True)
+        output_dir = BASE_DIR / "output" / "pdf"
+        output_dir.mkdir(parents=True, exist_ok=True)
 
         # 1) 基本打印
         print("\n1. 基本PDF打印:")
-        p1 = os.path.join(output_dir, "basic.pdf")
-        page.save_pdf(p1)
+        p1 = output_dir / "basic.pdf"
+        page.save_pdf(str(p1))
         print(f"   ✓ 已保存: {p1} ({_size_of(p1)} bytes)")
 
         # 2) A4 + 背景
         print("\n2. A4 + 背景:")
-        p2 = os.path.join(output_dir, "a4_bg.pdf")
+        p2 = output_dir / "a4_bg.pdf"
         page.save_pdf(
-            p2,
+            str(p2),
             page={"width": 21.0, "height": 29.7},
             background=True,
         )
@@ -58,9 +59,9 @@ def test_pdf_printing():
 
         # 3) 横向 + 缩放 + 页边距
         print("\n3. 横向 + 缩放 + 页边距:")
-        p3 = os.path.join(output_dir, "landscape_scaled.pdf")
+        p3 = output_dir / "landscape_scaled.pdf"
         page.save_pdf(
-            p3,
+            str(p3),
             orientation="landscape",
             scale=0.9,
             margin={
@@ -74,9 +75,9 @@ def test_pdf_printing():
 
         # 4) 指定页范围 + shrinkToFit
         print("\n4. 指定页范围 + shrinkToFit:")
-        p4 = os.path.join(output_dir, "page_ranges_shrink.pdf")
+        p4 = output_dir / "page_ranges_shrink.pdf"
         page.save_pdf(
-            p4,
+            str(p4),
             page_ranges=["1-2"],
             shrink_to_fit=True,
         )
