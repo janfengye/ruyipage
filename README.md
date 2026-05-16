@@ -25,6 +25,21 @@
 [![GitHub stars](https://img.shields.io/github/stars/LoseNine/ruyipage?style=social)](https://github.com/LoseNine/ruyipage/stargazers)
 [![Downloads](https://static.pepy.tech/badge/ruyipage)](https://pepy.tech/project/ruyipage)
 
+<table>
+  <tr>
+    <td width="180" align="center">
+      <a href="https://xjbtoken.site/">
+        <img src="images/xjbtoken.svg" width="160" alt="XJB AI" />
+      </a>
+    </td>
+    <td>
+      <sub>赞助商</sub><br>
+      <a href="https://xjbtoken.site/"><b>XJBToken</b></a><br>
+      低价实惠的 AI Token 中转站，包含 GPT 5.4 / 5.5 全系列，以及 Claude Opus 4.6 / 4.7 的 Kiro 和 Max 渠道，包纯度，实用耐蹬，如意自用：<a href="https://xjbtoken.site/">https://xjbtoken.site/</a>。
+    </td>
+  </tr>
+</table>
+
 ## 请我喝咖啡
 
 如果这个项目对你有帮助，欢迎请我喝杯咖啡，支持我继续完善 `ruyiPage`。

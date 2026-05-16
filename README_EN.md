@@ -25,6 +25,21 @@
 [![GitHub stars](https://img.shields.io/github/stars/LoseNine/ruyipage?style=social)](https://github.com/LoseNine/ruyipage/stargazers)
 [![Downloads](https://static.pepy.tech/badge/ruyipage)](https://pepy.tech/project/ruyipage)
 
+<table>
+  <tr>
+    <td width="180" align="center">
+      <a href="https://xjbtoken.site/">
+        <img src="images/xjbtoken.svg" width="160" alt="XJB AI" />
+      </a>
+    </td>
+    <td>
+      <sub>Sponsor</sub><br>
+      <a href="https://xjbtoken.site/"><b>XJBToken</b></a><br>
+      A low-cost and practical AI Token relay station, covering the full GPT 5.4 / 5.5 series and Claude Opus 4.6 / 4.7 Kiro and Max routes. Designed for clean, stable, and durable everyday use, and used by Ruyi itself: <a href="https://xjbtoken.site/">https://xjbtoken.site/</a>.
+    </td>
+  </tr>
+</table>
+
 ## Buy Me a Coffee
 
 If this project helps you, you are welcome to buy me a coffee and support continued work on `ruyiPage`.
