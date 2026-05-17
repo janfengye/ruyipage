@@ -1399,11 +1399,18 @@ class Firefox(object):
                     start_new_session=True,
                 )
         except FileNotFoundError:
+            try:
+                from .._runtime.resolver import missing_firefox_message
+
+                message = missing_firefox_message(opts.browser_path)
+            except Exception:
+                message = (
+                    "找不到 Firefox: {}\n"
+                    "请先运行 python -m ruyipage install，"
+                    "或通过 FirefoxOptions.set_browser_path() 指定路径"
+                ).format(opts.browser_path)
             raise BrowserLaunchError(
-                "找不到 Firefox: {}\n"
-                "请安装 Firefox 或通过 FirefoxOptions.set_browser_path() 指定路径".format(
-                    opts.browser_path
-                )
+                message
             )
         except Exception as e:
             raise BrowserLaunchError("启动 Firefox 失败: {}".format(e))

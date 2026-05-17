@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "ruyiPage"
-version = "1.2.17"
+version = "1.2.20"
 description = "专用于 AI 分析和数据采集场景，可拦截任意请求响应包的 Firefox 自动化库。"
 readme = { file = "README.md", content-type = "text/markdown" }
 requires-python = ">=3.9"
@@ -64,4 +64,7 @@ markers = [
   "integration: 多模块串联工作流回归",
   "release: 发版前最小通过集合",
   "local_server: 依赖本地测试 server",
+  "fast: 不需要真实 Firefox/BiDi 会话的快速测试",
+  "browser: 需要真实 Firefox/BiDi 会话的测试",
+  "asyncio: 异步 pytest 测试",
 ]

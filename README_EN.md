@@ -40,50 +40,6 @@
   </tr>
 </table>
 
-## Buy Me a Coffee
-
-If this project helps you, you are welcome to buy me a coffee and support continued work on `ruyiPage`.
-
-<table>
-  <tr>
-    <td align="center">
-      <b>Official Account</b><br>
-      <img src="images/gzh.jpg" width="220" alt="Official account QR code" />
-    </td>
-    <td align="center">
-      <b>QQ Group</b><br>
-      <img src="images/qq.jpg" width="220" alt="QQ group QR code" />
-    </td>
-    <td align="center">
-      <b>Contact Me / WeChat</b><br>
-      <img src="images/weixin.jpg" width="220" alt="Personal WeChat QR code" />
-    </td>
-    <td align="center">
-      <b>Buy Me a Coffee</b><br>
-      <img src="images/weixingoot.jpg" width="220" alt="Donation QR code" />
-    </td>
-  </tr>
-</table>
-
----
-
-## Companion Projects
-
-If you plan to use `ruyiPage` for AI-driven automation analysis, advanced web data capture, or high-risk browser workflows, start with these companion resources:
-
-- 📘 **Documentation / Automation Docs**
-  A central place for `ruyiPage` automation guidance, integration notes, and supporting project documentation: <https://0xshoulderlab.site/automation>
-- 🦊 **Firefox fingerprint browser project**
-  Intended for cases where you need a Firefox fingerprint environment, browser takeover, or more realistic automation behavior alongside `ruyiPage`: <https://github.com/LoseNine/firefox-fingerprintBrowser>
-- 🟨 **JavaScript implementation: ruyipage-js**
-  A companion implementation for the JavaScript / Node.js ecosystem, useful when you want to bring the `ruyiPage` approach and capabilities into JS-based projects: <https://github.com/GanFish404/ruyipage-js>
-- 🐹 **Go implementation: ruyipage-go**
-  A community-maintained Go implementation for teams that want to integrate Firefox automation capabilities into Go projects. Thanks to @pll177 for the implementation and maintenance: <https://github.com/pll177/ruyipage-go>
-- 🖥️ **Desktop GUI manager: ruyiBrowser-GUI**
-  A graphical Firefox fingerprint browser management tool built with Electron + Vue3. Create, manage, and launch multiple isolated fingerprint environments without the command line. Thanks to @jacklaigougou for the implementation and maintenance: <https://github.com/jacklaigougou/ruyiBrowser-GUI>
-
----
-
 ## Real-World Showcase
 
 The images below show real scenarios. To keep the GitHub homepage more compact, they are arranged in a two-column table.
@@ -145,6 +101,28 @@ Verify the installed version after installation:
 ```bash
 python -c "import ruyipage; print(ruyipage.__version__)"
 ```
+
+### Install the bundled Firefox runtime
+
+`ruyiPage` provides a Playwright-style browser installation flow. After installing the Python package, run:
+
+```bash
+python -m ruyipage install
+```
+
+This command downloads the Firefox runtime recommended by `ruyiPage`, verifies its SHA256, and installs it into the user cache directory. After that, `launch()` will prefer this runtime by default. If you pass `browser_path` explicitly, your explicit path still wins.
+
+Common commands:
+
+```bash
+python -m ruyipage install --dry-run     # show the download/install plan without downloading
+python -m ruyipage install --force       # force a reinstall
+python -m ruyipage install --from-file ./firefox.zip
+python -m ruyipage path                  # print the installed Firefox executable path
+python -m ruyipage doctor                # show current runtime install status
+```
+
+If you already have Firefox installed locally, or you use a portable build / fingerprint browser, you can skip this step and keep passing `browser_path` explicitly.
 
 ### Simplest launch
 
@@ -1647,3 +1625,47 @@ This project emphasizes:
 - adaptation to high-risk scenarios
 
 But these capabilities are limited to **lawful, compliant, and legitimate** technical research and automation scenarios.
+
+---
+
+## Companion Projects
+
+If you plan to use `ruyiPage` for AI-driven automation analysis, advanced web data capture, or high-risk browser workflows, start with these companion resources:
+
+- 📘 **Documentation / Automation Docs**
+  A central place for `ruyiPage` automation guidance, integration notes, and supporting project documentation: <https://0xshoulderlab.site/automation>
+- 🦊 **Firefox fingerprint browser project**
+  Intended for cases where you need a Firefox fingerprint environment, browser takeover, or more realistic automation behavior alongside `ruyiPage`: <https://github.com/LoseNine/firefox-fingerprintBrowser>
+- 🟨 **JavaScript implementation: ruyipage-js**
+  A companion implementation for the JavaScript / Node.js ecosystem, useful when you want to bring the `ruyiPage` approach and capabilities into JS-based projects: <https://github.com/GanFish404/ruyipage-js>
+- 🐹 **Go implementation: ruyipage-go**
+  A community-maintained Go implementation for teams that want to integrate Firefox automation capabilities into Go projects. Thanks to @pll177 for the implementation and maintenance: <https://github.com/pll177/ruyipage-go>
+- 🖥️ **Desktop GUI manager: ruyiBrowser-GUI**
+  A graphical Firefox fingerprint browser management tool built with Electron + Vue3. Create, manage, and launch multiple isolated fingerprint environments without the command line. Thanks to @jacklaigougou for the implementation and maintenance: <https://github.com/jacklaigougou/ruyiBrowser-GUI>
+
+---
+
+## Buy Me a Coffee
+
+If this project helps you, you are welcome to buy me a coffee and support continued work on `ruyiPage`.
+
+<table>
+  <tr>
+    <td align="center">
+      <b>Official Account</b><br>
+      <img src="images/gzh.jpg" width="220" alt="Official account QR code" />
+    </td>
+    <td align="center">
+      <b>QQ Group</b><br>
+      <img src="images/qq.jpg" width="220" alt="QQ group QR code" />
+    </td>
+    <td align="center">
+      <b>Contact Me / WeChat</b><br>
+      <img src="images/weixin.jpg" width="220" alt="Personal WeChat QR code" />
+    </td>
+    <td align="center">
+      <b>Buy Me a Coffee</b><br>
+      <img src="images/weixingoot.jpg" width="220" alt="Donation QR code" />
+    </td>
+  </tr>
+</table>

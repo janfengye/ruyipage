@@ -40,50 +40,6 @@
   </tr>
 </table>
 
-## 请我喝咖啡
-
-如果这个项目对你有帮助，欢迎请我喝杯咖啡，支持我继续完善 `ruyiPage`。
-
-<table>
-  <tr>
-    <td align="center">
-      <b>公众号</b><br>
-      <img src="images/gzh.jpg" width="220" alt="公众号二维码" />
-    </td>
-    <td align="center">
-      <b>QQ 社群</b><br>
-      <img src="images/qq.jpg" width="220" alt="QQ 社群二维码" />
-    </td>
-    <td align="center">
-      <b>联系我 / 个人微信</b><br>
-      <img src="images/weixin.jpg" width="220" alt="个人微信二维码" />
-    </td>
-    <td align="center">
-      <b>请我喝咖啡</b><br>
-      <img src="images/weixingoot.jpg" width="220" alt="收款码" />
-    </td>
-  </tr>
-</table>
-
----
-
-## 配套项目
-
-如果你准备把 `ruyiPage` 用在 AI 自动化分析、复杂网页采集或高风控页面场景，建议先看这些配套项目：
-
-- 📘 **官方文档 / 自动化文档**
-  更系统地查看 `ruyiPage` 相关自动化说明、接入方式和配套能力说明：<https://0xshoulderlab.site/automation>
-- 🦊 **Firefox 指纹浏览器项目**
-  用于需要 Firefox 指纹环境、浏览器接管或更高真实度自动化场景，适合和 `ruyiPage` 搭配使用：<https://github.com/LoseNine/firefox-fingerprintBrowser>
-- 🟨 **JavaScript 实现：ruyipage-js**
-  面向 JavaScript / Node.js 生态的配套实现，适合希望在 JS 项目里接入 `ruyiPage` 思路与能力的场景：<https://github.com/GanFish404/ruyipage-js>
-- 🐹 **Go 语言实现：ruyipage-go**
-  由社区实现的 Go 版本，适合需要在 Go 项目中接入 Firefox 自动化能力的场景。感谢 @pll177 的实现与维护：<https://github.com/pll177/ruyipage-go>
-- 🖥️ **桌面端 GUI 管理工具：ruyiBrowser-GUI**
-  基于 Electron + Vue3 的 Firefox 指纹浏览器图形化管理工具，无需命令行即可创建、管理和启动多个独立指纹环境。感谢 @jacklaigougou 的实现与维护：<https://github.com/jacklaigougou/ruyiBrowser-GUI>
-
----
-
 ## 实战展示
 
 下面这些图放的是实际场景展示。为了在 GitHub 首页里更紧凑，我这里用两列表格展示。
@@ -145,6 +101,28 @@ pip install -r requirements.txt
 ```bash
 python -c "import ruyipage; print(ruyipage.__version__)"
 ```
+
+### 安装配套 Firefox runtime
+
+`ruyiPage` 提供了类似 Playwright 的浏览器安装方式。安装 Python 包后，建议执行：
+
+```bash
+python -m ruyipage install
+```
+
+这个命令会下载 `ruyiPage` 推荐的 Firefox runtime，校验 SHA256 后安装到用户缓存目录。后续直接调用 `launch()` 时，会优先使用这个 runtime；如果你显式传入 `browser_path`，仍然以你传入的路径为准。
+
+常用命令：
+
+```bash
+python -m ruyipage install --dry-run     # 只查看下载和安装计划，不下载文件
+python -m ruyipage install --force       # 强制重新下载安装
+python -m ruyipage install --from-file ./firefox.zip
+python -m ruyipage path                  # 输出当前已安装 runtime 的 Firefox 路径
+python -m ruyipage doctor                # 查看当前 runtime 安装状态
+```
+
+如果你本机已经装好了 Firefox，或者你使用的是便携版 / 指纹浏览器，也可以跳过这个步骤，继续通过 `browser_path` 显式指定浏览器路径。
 
 ### 最简单启动
 
@@ -1753,3 +1731,47 @@ FingerprintError
 - 高风控场景适配
 
 但这些能力仅限于**合法、合规、正当**的技术研究和自动化应用场景。
+
+---
+
+## 配套项目
+
+如果你准备把 `ruyiPage` 用在 AI 自动化分析、复杂网页采集或高风控页面场景，建议先看这些配套项目：
+
+- 📘 **官方文档 / 自动化文档**
+  更系统地查看 `ruyiPage` 相关自动化说明、接入方式和配套能力说明：<https://0xshoulderlab.site/automation>
+- 🦊 **Firefox 指纹浏览器项目**
+  用于需要 Firefox 指纹环境、浏览器接管或更高真实度自动化场景，适合和 `ruyiPage` 搭配使用：<https://github.com/LoseNine/firefox-fingerprintBrowser>
+- 🟨 **JavaScript 实现：ruyipage-js**
+  面向 JavaScript / Node.js 生态的配套实现，适合希望在 JS 项目里接入 `ruyiPage` 思路与能力的场景：<https://github.com/GanFish404/ruyipage-js>
+- 🐹 **Go 语言实现：ruyipage-go**
+  由社区实现的 Go 版本，适合需要在 Go 项目中接入 Firefox 自动化能力的场景。感谢 @pll177 的实现与维护：<https://github.com/pll177/ruyipage-go>
+- 🖥️ **桌面端 GUI 管理工具：ruyiBrowser-GUI**
+  基于 Electron + Vue3 的 Firefox 指纹浏览器图形化管理工具，无需命令行即可创建、管理和启动多个独立指纹环境。感谢 @jacklaigougou 的实现与维护：<https://github.com/jacklaigougou/ruyiBrowser-GUI>
+
+---
+
+## 请我喝咖啡
+
+如果这个项目对你有帮助，欢迎请我喝杯咖啡，支持我继续完善 `ruyiPage`。
+
+<table>
+  <tr>
+    <td align="center">
+      <b>公众号</b><br>
+      <img src="images/gzh.jpg" width="220" alt="公众号二维码" />
+    </td>
+    <td align="center">
+      <b>QQ 社群</b><br>
+      <img src="images/qq.jpg" width="220" alt="QQ 社群二维码" />
+    </td>
+    <td align="center">
+      <b>联系我 / 个人微信</b><br>
+      <img src="images/weixin.jpg" width="220" alt="个人微信二维码" />
+    </td>
+    <td align="center">
+      <b>请我喝咖啡</b><br>
+      <img src="images/weixingoot.jpg" width="220" alt="收款码" />
+    </td>
+  </tr>
+</table>

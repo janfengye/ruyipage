@@ -90,6 +90,7 @@ from ._fingerprint import (
     GeoError,
     CountryMismatchError,
 )
+from ._runtime.resolver import resolve_firefox_path
 
 
 def _page_from_existing_browser_info(info, tab_index=1, latest_tab=False):
@@ -220,6 +221,8 @@ def launch(
         port: 远程调试端口
         browser_path: Firefox 可执行文件路径。
             适用于 Firefox 安装在非默认目录时。
+            如果不传，ruyiPage 会优先使用 ``python -m ruyipage install``
+            安装的配套 Firefox runtime，再回退系统 Firefox。
         user_dir: 用户目录 / profile 目录。
             适用于希望复用登录态、Cookie、扩展时。
         proxy: 代理地址，例如 ``"http://127.0.0.1:7890"`` 或
@@ -249,6 +252,7 @@ def launch(
         private=private,
         xpath_picker=xpath_picker,
         action_visual=action_visual,
+        user_dir=user_dir,
         proxy=proxy,
         close_on_exit=close_on_exit,
         window_size=window_size,
@@ -259,8 +263,9 @@ def launch(
         failure_snapshot=failure_snapshot,
         snapshot_dir=snapshot_dir,
     )
-    if browser_path:
-        opts.set_browser_path(browser_path)
+    resolved_browser_path = resolve_firefox_path(browser_path)
+    if resolved_browser_path:
+        opts.set_browser_path(resolved_browser_path)
     return FirefoxPage(opts)
 
 
