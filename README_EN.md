@@ -293,7 +293,7 @@ Notes:
 - `close_on_exit(True)` is enabled by default, but it only auto-closes browsers started by `ruyiPage` itself.
 - If you attach to an external browser through `existing_only(True)` or `attach()`, Python exit only disconnects the session and does not close the external browser process.
 - If you do not set `user_dir` / `profile`, `ruyiPage` creates a temporary profile automatically. That is convenient for one-off scripts.
-- `set_fpfile()` currently mainly passes the path via `--fpfile=...` and reads proxy-auth fields from that file. It should not be described as a universal auto-fingerprint configuration entry.
+- `set_fpfile()` currently mainly passes the path via `--fpfile=...` and reads proxy-auth fields from that file. If `fpfile` contains SOCKS5 host/port data and `user_dir` is set, ruyipage writes the matching profile proxy prefs. It should not be described as a universal auto-fingerprint configuration entry.
 - `quick_start()` is a convenience preset, not a replacement for every `FirefoxOptions` method. When you need precise control, combine the individual `FirefoxOptions` methods directly.
 
 If you only want the fastest way to launch, use `launch()`. If you want startup behavior to be more explicit and easier to hand off to end users, prefer `FirefoxOptions`.
@@ -735,6 +735,30 @@ opts.set_fpfile(r"C:\path\to\your\profile1.txt")
 page = FirefoxPage(opts)
 page.get("http://ipinfo.io/json")
 ```
+
+#### SOCKS5 Password Proxy: user_dir + fpfile
+
+If the SOCKS5 proxy address and password are stored in `fpfile`, your code does not need to prepare a Firefox profile ahead of time. Pass `user_dir` and `fpfile`, and ruyipage writes `user.js` in that directory with `network.proxy.socks`, `network.proxy.socks_port`, `network.proxy.socks_version=5`, and `network.proxy.socks_remote_dns=true`. The username and password stay in `fpfile`; they are not written to `user.js`.
+
+For example, an `fpfile` supported by your Firefox kernel can contain:
+
+```text
+gate.kookeey.info:1000:your-user:your-password
+```
+
+```python
+from ruyipage import launch
+
+page = launch(
+    browser_path=r"C:\firefox\firefox.exe",
+    user_dir=r"C:\firefox\socks5-profile",
+    fpfile=r"C:\firefox\fp.txt",
+    headless=False,
+)
+page.get("https://ipinfo.io/json")
+```
+
+You can still pass `proxy="socks5://host:port"` explicitly. In that case ruyipage uses `proxy` to write the profile prefs, while credentials are still read from `fpfile` by a Firefox kernel that supports `--fpfile`.
 
 Suitable for:
 

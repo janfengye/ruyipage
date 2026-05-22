@@ -4,6 +4,7 @@
 import os
 import re
 import sys
+from urllib.parse import urlsplit
 
 
 class FirefoxOptions(object):
@@ -732,6 +733,120 @@ class FirefoxOptions(object):
                     result["password"] = value
         return result
 
+    def _read_socks5_proxy_from_fpfile(self, path):
+        if not path:
+            return None
+
+        fpfile_path = os.path.abspath(path)
+        if not os.path.exists(fpfile_path):
+            return None
+
+        kv = {}
+        with open(fpfile_path, "r", encoding="utf-8", errors="ignore") as f:
+            for raw_line in f:
+                line = raw_line.strip()
+                if not line or line.startswith("#") or line.startswith("//"):
+                    continue
+
+                parsed = self._parse_socks5_proxy_line(line, keyed=False)
+                if parsed:
+                    return parsed
+
+                if ":" in line:
+                    key, value = line.split(":", 1)
+                    key = key.strip().lower()
+                    value = value.strip()
+                    kv[key] = value
+                    parsed = self._parse_socks5_proxy_value(key, value)
+                    if parsed:
+                        return parsed
+
+                if "=" in line:
+                    key, value = line.split("=", 1)
+                    key = key.strip().lower()
+                    value = value.strip()
+                    kv[key] = value
+                    parsed = self._parse_socks5_proxy_value(key, value)
+                    if parsed:
+                        return parsed
+
+        return self._parse_socks5_proxy_kv(kv)
+
+    def _parse_socks5_proxy_value(self, key, value):
+        if key in ("socks5", "socks5.proxy", "socks5.url"):
+            return self._parse_socks5_proxy_line(value, keyed=True)
+        if key in ("proxy", "proxy.url"):
+            if value.lower().startswith(("socks://", "socks4://", "socks5://")):
+                return self._parse_socks5_proxy_line(value, keyed=True)
+        return None
+
+    def _parse_socks5_proxy_kv(self, values):
+        scheme = (
+            values.get("proxy.scheme")
+            or values.get("proxy.type")
+            or values.get("scheme")
+            or "socks5"
+        )
+        if not str(scheme).lower().startswith("socks"):
+            return None
+
+        host = (
+            values.get("socks5.host")
+            or values.get("socks5_host")
+            or values.get("socks.host")
+            or values.get("socks_host")
+            or values.get("proxy.host")
+            or values.get("proxy_host")
+        )
+        port = (
+            values.get("socks5.port")
+            or values.get("socks5_port")
+            or values.get("socks.port")
+            or values.get("socks_port")
+            or values.get("proxy.port")
+            or values.get("proxy_port")
+        )
+        return self._coerce_socks5_proxy(host, port)
+
+    def _parse_socks5_proxy_line(self, value, keyed):
+        value = (value or "").strip()
+        if not value:
+            return None
+
+        lowered = value.lower()
+        if lowered.startswith(("socks://", "socks4://", "socks5://")):
+            parsed = urlsplit(value)
+            if not parsed.hostname or parsed.port is None:
+                return None
+            return self._coerce_socks5_proxy(parsed.hostname, parsed.port)
+
+        parts = value.split(":")
+        if len(parts) < (2 if keyed else 4):
+            return None
+        if not keyed and not self._looks_like_proxy_host(parts[0]):
+            return None
+        return self._coerce_socks5_proxy(parts[0], parts[1])
+
+    def _coerce_socks5_proxy(self, host, port):
+        host = str(host or "").strip()
+        if not host:
+            return None
+        try:
+            port = int(str(port).strip())
+        except (TypeError, ValueError):
+            return None
+        if port <= 0 or port > 65535:
+            return None
+        return {"host": host, "port": port}
+
+    def _looks_like_proxy_host(self, host):
+        host = str(host or "").strip().lower()
+        if host == "localhost":
+            return True
+        if re.match(r"^\d{1,3}(?:\.\d{1,3}){3}$", host):
+            return True
+        return "." in host
+
     def set_window_size(self, width, height):
         """设置浏览器窗口大小
 
@@ -760,6 +875,7 @@ class FirefoxOptions(object):
         browser_path=None,
         user_dir=None,
         proxy=None,
+        fpfile=None,
         close_on_exit=True,
         private=False,
         headless=False,
@@ -788,6 +904,7 @@ class FirefoxOptions(object):
             proxy: 代理地址。
                 例如 ``"http://127.0.0.1:7890"`` 或
                 ``"socks5://127.0.0.1:1080"``。
+            fpfile: 指纹 / 代理认证配置文件路径。
             close_on_exit: Python 程序退出时是否自动关闭浏览器。
                 默认 ``True``，适合脚本跑完自动收尾。
             private: 是否启用 Firefox 私密浏览模式。
@@ -823,6 +940,8 @@ class FirefoxOptions(object):
             self.set_user_dir(user_dir)
         if proxy:
             self.set_proxy(proxy)
+        if fpfile:
+            self.set_fpfile(fpfile)
         self.close_on_exit(close_on_exit)
         self.private_mode(private)
         self.headless(headless)
@@ -907,8 +1026,15 @@ class FirefoxOptions(object):
             prefs["browser.download.useDownloadDir"] = True
 
         # 代理设置
-        if self._proxy:
-            proxy = self._proxy
+        proxy = self._proxy
+        if not proxy:
+            socks5_proxy = self._read_socks5_proxy_from_fpfile(self._fpfile)
+            if socks5_proxy:
+                proxy = "socks5://{}:{}".format(
+                    socks5_proxy["host"], socks5_proxy["port"]
+                )
+
+        if proxy:
             if "://" in proxy:
                 scheme, addr = proxy.split("://", 1)
             else:
@@ -921,6 +1047,7 @@ class FirefoxOptions(object):
                 prefs["network.proxy.socks"] = host
                 prefs["network.proxy.socks_port"] = int(port)
                 prefs["network.proxy.socks_version"] = 5 if "5" in scheme else 4
+                prefs["network.proxy.socks_remote_dns"] = True
             else:
                 prefs["network.proxy.type"] = 1
                 prefs["network.proxy.http"] = host

@@ -293,7 +293,7 @@ page.quit()
 - `close_on_exit(True)` 默认开启，但只会自动关闭 **ruyiPage 自己启动的浏览器**。
 - 如果你是通过 `existing_only(True)` 或 `attach()` 接管外部浏览器，Python 退出时只会断开连接，不会误关用户手动打开的浏览器。
 - 不设置 `user_dir` / `profile` 时，`ruyiPage` 会自动创建临时 profile，更适合一次性脚本。
-- `set_fpfile()` 当前主要是把路径通过 `--fpfile=...` 传给浏览器，并读取其中的代理认证字段；它不是一个自动填充所有浏览器指纹参数的万能入口。
+- `set_fpfile()` 当前主要是把路径通过 `--fpfile=...` 传给浏览器，并读取其中的代理认证字段；如果 `fpfile` 中包含 SOCKS5 的 host/port，且指定了 `user_dir`，ruyipage 会写入对应的 profile 代理 prefs。它不是一个自动填充所有浏览器指纹参数的万能入口。
 - `quick_start()` 适合快速开始，但不是全部配置项的替代品；需要精细控制时，仍建议直接组合 `FirefoxOptions` 的各个方法。
 
 如果你只是想快速启动，优先用 `launch()`；如果你想把浏览器行为写得更明确、更适合对外给用户使用，优先用 `FirefoxOptions`。
@@ -732,6 +732,30 @@ opts.set_fpfile(r"C:\path\to\your\profile1.txt")
 page = FirefoxPage(opts)
 page.get("http://ipinfo.io/json")
 ```
+
+#### SOCKS5 密码代理：user_dir + fpfile
+
+如果 SOCKS5 代理地址和密码保存在 `fpfile` 中，业务代码不需要提前准备 Firefox profile。传入 `user_dir` 和 `fpfile` 后，ruyipage 会在该目录写入 `user.js`，配置 `network.proxy.socks`、`network.proxy.socks_port`、`network.proxy.socks_version=5` 和 `network.proxy.socks_remote_dns=true`。用户名和密码继续留在 `fpfile`，不会写入 `user.js`。
+
+`fpfile` 可以使用你的 Firefox 内核支持的格式，例如：
+
+```text
+gate.kookeey.info:1000:your-user:your-password
+```
+
+```python
+from ruyipage import launch
+
+page = launch(
+    browser_path=r"C:\firefox\firefox.exe",
+    user_dir=r"C:\firefox\socks5-profile",
+    fpfile=r"C:\firefox\fp.txt",
+    headless=False,
+)
+page.get("https://ipinfo.io/json")
+```
+
+也可以继续显式传 `proxy="socks5://host:port"`；这种情况下 ruyipage 使用 `proxy` 写入 profile，认证信息仍由支持 `--fpfile` 的 Firefox 内核从 `fpfile` 读取。
 
 适用场景：
 
