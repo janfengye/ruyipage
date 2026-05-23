@@ -88,6 +88,31 @@ def test_install_from_file_fake_zip(monkeypatch, tmp_path):
     assert installer.is_installed(root=str(tmp_path / "cache")) is True
 
 
+def test_install_from_file_does_not_require_matching_sha256(monkeypatch, tmp_path):
+    archive = tmp_path / "runtime.zip"
+    _make_zip(archive, {"firefox/firefox.exe": "fake exe"})
+
+    fake_info = {
+        "name": "firefox",
+        "version": "test",
+        "release": "vtest",
+        "platform": "win64",
+        "asset": archive.name,
+        "archive_type": "zip",
+        "sha256": "0" * 64,
+        "executable": "firefox/firefox.exe",
+        "install_subdir": "firefox-test-win64",
+        "max_files": 100,
+        "max_total_size": 1024 * 1024,
+    }
+    monkeypatch.setattr(installer, "runtime_info", lambda platform_key=None: dict(fake_info))
+
+    result = installer.install(root=str(tmp_path / "cache"), from_file=str(archive))
+
+    assert result["installed"] is True
+    assert os.path.isfile(result["executable_path"])
+
+
 def test_resolver_prefers_explicit_path(monkeypatch, tmp_path):
     explicit = tmp_path / "firefox.exe"
     explicit.write_text("fake")

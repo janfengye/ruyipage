@@ -14,7 +14,6 @@ from .errors import RuntimeInstallError, RuntimeNotInstalledError
 from .manifest import RUNTIMES, runtime_url
 from .paths import browsers_root, tmp_dir
 from .platform import current_platform_key
-from .verify import verify_sha256
 
 
 def runtime_info(platform_key=None):
@@ -54,8 +53,6 @@ def install(root=None, force=False, from_file=None, base_url=None, dry_run=False
             raise RuntimeInstallError("离线安装文件不存在: {}".format(archive_path))
     else:
         archive_path = download(url, info["asset"], root=root, quiet=quiet)
-
-    verify_sha256(archive_path, info["sha256"])
 
     temp_install_dir = tempfile.mkdtemp(prefix=info["install_subdir"] + ".", dir=tmp_root)
     final_backup = None
@@ -147,7 +144,6 @@ def _metadata(info, install_dir, exe_path, url, installed=None):
         "release": info["release"],
         "platform": info["platform"],
         "asset": info["asset"],
-        "sha256": info["sha256"],
         "url": url,
         "install_dir": install_dir,
         "executable_path": exe_path,
@@ -163,7 +159,6 @@ def _write_install_json(install_dir, info, archive_path, url):
         "release": info["release"],
         "platform": info["platform"],
         "asset": info["asset"],
-        "sha256": info["sha256"],
         "url": url,
         "archive_path": os.path.abspath(archive_path),
         "executable": info["executable"],

@@ -66,7 +66,7 @@ def test_launch_forwards_user_dir_to_options(tmp_path):
 def test_write_prefs_uses_socks5_proxy_from_fpfile(tmp_path):
     fpfile = tmp_path / "fp.txt"
     fpfile.write_text(
-        "gate.kookeey.info:1000:proxy-user:proxy-pass\n",
+        "proxy.example.com:1000:username-value:password-value\n",
         encoding="utf-8",
     )
 
@@ -77,12 +77,42 @@ def test_write_prefs_uses_socks5_proxy_from_fpfile(tmp_path):
 
     content = (tmp_path / "user.js").read_text(encoding="utf-8")
     assert 'user_pref("network.proxy.type", 1);' in content
-    assert 'user_pref("network.proxy.socks", "gate.kookeey.info");' in content
+    assert 'user_pref("network.proxy.socks", "proxy.example.com");' in content
     assert 'user_pref("network.proxy.socks_port", 1000);' in content
     assert 'user_pref("network.proxy.socks_version", 5);' in content
     assert 'user_pref("network.proxy.socks_remote_dns", true);' in content
-    assert "proxy-user" not in content
-    assert "proxy-pass" not in content
+    assert "username-value" not in content
+    assert "password-value" not in content
+
+
+def test_write_prefs_uses_socksauth_fields_from_fpfile(tmp_path):
+    fpfile = tmp_path / "fp.txt"
+    fpfile.write_text(
+        "\n".join(
+            [
+                "socksauth.host:proxy.example.com",
+                "socksauth.port:1000",
+                "socksauth.username:username-value",
+                "socksauth.password:password-value",
+            ]
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    opts = FirefoxOptions()
+    opts.quick_start(user_dir=str(tmp_path), fpfile=str(fpfile))
+
+    opts.write_prefs_to_profile()
+
+    content = (tmp_path / "user.js").read_text(encoding="utf-8")
+    assert 'user_pref("network.proxy.type", 1);' in content
+    assert 'user_pref("network.proxy.socks", "proxy.example.com");' in content
+    assert 'user_pref("network.proxy.socks_port", 1000);' in content
+    assert 'user_pref("network.proxy.socks_version", 5);' in content
+    assert 'user_pref("network.proxy.socks_remote_dns", true);' in content
+    assert "username-value" not in content
+    assert "password-value" not in content
 
 
 def test_write_prefs_does_not_treat_fpfile_ipv6_as_socks5_proxy(tmp_path):

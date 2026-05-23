@@ -19,7 +19,7 @@ def main(argv=None):
     install_parser.add_argument("--dry-run", action="store_true", help="show install plan without downloading")
     install_parser.add_argument("--from-file", help="install from a local release archive")
     install_parser.add_argument("--install-dir", help="override browser install root")
-    install_parser.add_argument("--base-url", help="override download base URL; sha256 is still enforced")
+    install_parser.add_argument("--base-url", help="override download base URL")
     install_parser.add_argument("--json", action="store_true", help="print JSON output")
     install_parser.add_argument("--quiet", action="store_true", help="reduce output")
 

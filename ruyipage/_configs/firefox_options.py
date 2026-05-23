@@ -793,6 +793,8 @@ class FirefoxOptions(object):
         host = (
             values.get("socks5.host")
             or values.get("socks5_host")
+            or values.get("socksauth.host")
+            or values.get("socksauth_host")
             or values.get("socks.host")
             or values.get("socks_host")
             or values.get("proxy.host")
@@ -801,6 +803,8 @@ class FirefoxOptions(object):
         port = (
             values.get("socks5.port")
             or values.get("socks5_port")
+            or values.get("socksauth.port")
+            or values.get("socksauth_port")
             or values.get("socks.port")
             or values.get("socks_port")
             or values.get("proxy.port")
