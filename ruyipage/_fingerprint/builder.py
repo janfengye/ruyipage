@@ -10,8 +10,8 @@ Goal
 ----
 Provide a single one-stop API ``apply_smart_fingerprint(opts, ...)`` that:
 
-1. Probes the egress IP and resolves geo information through 5 fall-back
-   data sources (geojs.io, ipapi.co, ipwho.is, ip-api.com, ipinfo.io).
+1. Probes the egress IP and resolves geo information through 10 fall-back
+   data sources (geojs.io, ipapi.co, ipwho.is, ip-api.com, ipinfo.io, etc.).
 2. Optionally enforces a country-code requirement (``require_country``).
 3. Picks one of 22 real Windows hardware profiles (NVIDIA / AMD / Intel),
    composes a Firefox 151 ±2 user-agent and a per-session canvas seed.
@@ -29,6 +29,7 @@ Public API
 
     fetch_geo_info(proxies, ...) -> GeoInfo
     fetch_public_ipv6(proxies, ...) -> Optional[str]
+    coerce_manual_geo(data, ...) -> GeoInfo
     pick_fingerprint(geo, ...) -> FingerprintProfile
     write_fpfile(path, geo, fp, ...) -> None
 
@@ -66,6 +67,13 @@ Typical usage
             proxy_host="proxy.example.com", proxy_port=8080,
             proxy_user="u", proxy_pwd="p",
             require_country="US",
+            manual_geo={
+                "ip": "75.166.187.10",
+                "country_code": "US",
+                "timezone": "America/Denver",
+                "latitude": 39.7392,
+                "longitude": -104.9903,
+            },
             logger=print,
         )
     except CountryMismatchError as e:
@@ -93,7 +101,7 @@ import tempfile
 import time
 from dataclasses import dataclass, field
 from datetime import datetime
-from typing import Any, Callable, Dict, List, Optional, Tuple
+from typing import Any, Callable, Dict, List, Mapping, Optional, Tuple
 
 
 # ---------------------------------------------------------------------------
@@ -575,11 +583,16 @@ def build_proxies_dict(
 
 # Each entry: (tag, url, parser_callable)
 _GEO_SOURCES: List[Tuple[str, str, str]] = [
-    ("geojs",  "https://get.geojs.io/v1/ip/geo.json",                "geojs"),
-    ("ipapi",  "https://ipapi.co/json/",                              "ipapi"),
-    ("ipwho",  "https://ipwho.is/",                                   "ipwho"),
-    ("ipapi2", "http://ip-api.com/json?fields=66846719",              "ipapi2"),
-    ("ipinfo", "https://ipinfo.io/json",                              "ipinfo"),
+    ("geojs",         "https://get.geojs.io/v1/ip/geo.json",           "geojs"),
+    ("ipapi",         "https://ipapi.co/json/",                         "ipapi"),
+    ("ipwho",         "https://ipwho.is/",                              "ipwho"),
+    ("ipapi2",        "http://ip-api.com/json?fields=66846719",         "ipapi2"),
+    ("ipinfo",        "https://ipinfo.io/json",                         "ipinfo"),
+    ("ipapi-is",      "https://api.ipapi.is/",                           "ipapi_is"),
+    ("ip-guide",      "https://ip.guide/",                                "ip_guide"),
+    ("ipwhois-app",   "https://ipwhois.app/json/",                      "ipwhois_app"),
+    ("freeipapi",     "https://freeipapi.com/api/json",                 "freeipapi"),
+    ("reallyfreegeoip", "https://reallyfreegeoip.org/json/",             "reallyfreegeoip"),
 ]
 
 
@@ -674,12 +687,102 @@ def _parse_ipinfo(payload: Dict[str, Any]) -> Optional[GeoInfo]:
     )
 
 
+def _parse_ipapi_is(payload: Dict[str, Any]) -> Optional[GeoInfo]:
+    """Parse the JSON returned by ``api.ipapi.is``."""
+    loc = payload.get("location") or {}
+    return GeoInfo(
+        ip=str(payload.get("ip") or "").strip(),
+        country_code=str(loc.get("country_code") or "").strip().upper(),
+        country=str(loc.get("country") or "").strip(),
+        region=str(loc.get("state") or "").strip(),
+        city=str(loc.get("city") or "").strip(),
+        timezone=str(loc.get("timezone") or "").strip(),
+        latitude=_to_float(loc.get("latitude") or 0),
+        longitude=_to_float(loc.get("longitude") or 0),
+        source="ipapi-is",
+    )
+
+
+def _parse_ip_guide(payload: Dict[str, Any]) -> Optional[GeoInfo]:
+    """Parse the JSON returned by ``ip.guide``."""
+    loc = payload.get("location") or {}
+    network = payload.get("network") or {}
+    asn = network.get("autonomous_system") or {}
+    return GeoInfo(
+        ip=str(payload.get("ip") or "").strip(),
+        country_code=str(asn.get("country") or "").strip().upper(),
+        country=str(loc.get("country") or "").strip(),
+        region=str(loc.get("region") or "").strip(),
+        city=str(loc.get("city") or "").strip(),
+        timezone=str(loc.get("timezone") or "").strip(),
+        latitude=_to_float(loc.get("latitude") or 0),
+        longitude=_to_float(loc.get("longitude") or 0),
+        source="ip-guide",
+    )
+
+
+def _parse_ipwhois_app(payload: Dict[str, Any]) -> Optional[GeoInfo]:
+    """Parse the JSON returned by ``ipwhois.app/json``."""
+    if str(payload.get("success", "true")).lower() == "false":
+        raise ValueError(str(payload.get("message") or "ipwhois.app error"))
+    return GeoInfo(
+        ip=str(payload.get("ip") or "").strip(),
+        country_code=str(payload.get("country_code") or "").strip().upper(),
+        country=str(payload.get("country") or "").strip(),
+        region=str(payload.get("region") or "").strip(),
+        city=str(payload.get("city") or "").strip(),
+        timezone=str(payload.get("timezone") or "").strip(),
+        latitude=_to_float(payload.get("latitude") or 0),
+        longitude=_to_float(payload.get("longitude") or 0),
+        source="ipwhois-app",
+    )
+
+
+def _parse_freeipapi(payload: Dict[str, Any]) -> Optional[GeoInfo]:
+    """Parse the JSON returned by ``freeipapi.com/api/json``."""
+    timezones = payload.get("timeZones") or []
+    timezone = timezones[0] if timezones else payload.get("timeZone")
+    return GeoInfo(
+        ip=str(payload.get("ipAddress") or payload.get("ip") or "").strip(),
+        country_code=str(
+            payload.get("countryCode") or payload.get("country_code") or ""
+        ).strip().upper(),
+        country=str(payload.get("countryName") or payload.get("country") or "").strip(),
+        region=str(payload.get("regionName") or payload.get("region") or "").strip(),
+        city=str(payload.get("cityName") or payload.get("city") or "").strip(),
+        timezone=str(timezone or payload.get("timezone") or "").strip(),
+        latitude=_to_float(payload.get("latitude") or 0),
+        longitude=_to_float(payload.get("longitude") or 0),
+        source="freeipapi",
+    )
+
+
+def _parse_reallyfreegeoip(payload: Dict[str, Any]) -> Optional[GeoInfo]:
+    """Parse the JSON returned by ``reallyfreegeoip.org/json``."""
+    return GeoInfo(
+        ip=str(payload.get("ip") or payload.get("IPv4") or "").strip(),
+        country_code=str(payload.get("country_code") or "").strip().upper(),
+        country=str(payload.get("country_name") or "").strip(),
+        region=str(payload.get("region_name") or payload.get("region_code") or "").strip(),
+        city=str(payload.get("city") or "").strip(),
+        timezone=str(payload.get("time_zone") or payload.get("timezone") or "").strip(),
+        latitude=_to_float(payload.get("latitude") or 0),
+        longitude=_to_float(payload.get("longitude") or 0),
+        source="reallyfreegeoip",
+    )
+
+
 _PARSERS = {
     "geojs":  _parse_geojs,
     "ipapi":  _parse_ipapi,
     "ipwho":  _parse_ipwho,
     "ipapi2": _parse_ipapi_com,
     "ipinfo": _parse_ipinfo,
+    "ipapi_is": _parse_ipapi_is,
+    "ip_guide": _parse_ip_guide,
+    "ipwhois_app": _parse_ipwhois_app,
+    "freeipapi": _parse_freeipapi,
+    "reallyfreegeoip": _parse_reallyfreegeoip,
 }
 
 
@@ -723,7 +826,7 @@ def fetch_geo_info(
     retries_per_source: int = 1,
     logger: Optional[Callable[[str], None]] = None,
 ) -> GeoInfo:
-    """Resolve the egress IP and its geo info via 5 fall-back data sources.
+    """Resolve the egress IP and its geo info via 10 fall-back data sources.
 
     Parameters
     ----------
@@ -753,7 +856,7 @@ def fetch_geo_info(
     CountryMismatchError
         ``require_country`` set and the geo source observed a different cc.
     GeoError
-        All five sources failed (network, parse, missing fields).
+        All ten sources failed (network, parse, missing fields).
     """
     log = logger or (lambda _msg: None)
     require_country = (require_country or "").strip().upper() or None
@@ -786,6 +889,50 @@ def fetch_geo_info(
                 continue
 
     raise GeoError("all geo sources failed: " + " | ".join(errors))
+
+
+def coerce_manual_geo(
+    value: Any,
+    *,
+    require_country: Optional[str] = None,
+) -> GeoInfo:
+    """Normalize user-provided geo data into :class:`GeoInfo`.
+
+    This is intended as an explicit fallback for environments where every
+    online geo source fails, usually because the proxy cannot reach them.
+    """
+    if isinstance(value, GeoInfo):
+        geo = value
+    elif isinstance(value, Mapping):
+        required = ("ip", "country_code", "timezone", "latitude", "longitude")
+        missing = [key for key in required if value.get(key) in (None, "")]
+        if missing:
+            raise GeoError(
+                "manual_geo missing required fields: " + ", ".join(missing)
+            )
+        try:
+            geo = GeoInfo(
+                ip=str(value["ip"]).strip(),
+                country_code=str(value["country_code"]).strip().upper(),
+                country=str(value.get("country") or "").strip(),
+                region=str(value.get("region") or "").strip(),
+                city=str(value.get("city") or "").strip(),
+                timezone=str(value["timezone"]).strip(),
+                latitude=_to_float(value["latitude"]),
+                longitude=_to_float(value["longitude"]),
+                source=str(value.get("source") or "manual").strip() or "manual",
+                ipv6=value.get("ipv6"),
+            )
+        except (KeyError, TypeError, ValueError) as e:
+            raise GeoError("invalid manual_geo: {}".format(e))
+    else:
+        raise GeoError("manual_geo must be a GeoInfo or mapping")
+
+    _validate_geo(geo)
+    require_country = (require_country or "").strip().upper() or None
+    if require_country and geo.country_code != require_country:
+        raise CountryMismatchError(actual=geo.country_code, required=require_country)
+    return geo
 
 
 # ---------------------------------------------------------------------------
@@ -1278,6 +1425,7 @@ def apply_smart_fingerprint(
     require_country: Optional[str] = "US",
     geo_timeout: float = 8.0,
     geo_retries: int = 1,
+    manual_geo: Optional[Any] = None,
     fetch_ipv6: bool = True,
     fingerprints_path: Optional[str] = None,
     region_locales_path: Optional[str] = None,
@@ -1294,7 +1442,8 @@ def apply_smart_fingerprint(
 
     1. ``build_proxies_dict()``  - construct the ``requests`` proxies dict.
     2. ``fetch_geo_info()``      - resolve egress geo; enforce
-       ``require_country`` if set.
+       ``require_country`` if set. If all online sources fail and
+       ``manual_geo`` is provided, continue with that explicit user data.
     3. ``fetch_public_ipv6()``   - optional, best-effort.
     4. ``_generate_userdir()``   - only if ``userdir`` is ``None``.
     5. ``pick_fingerprint()``    - sample one of the 22 hardware profiles.
@@ -1321,6 +1470,11 @@ def apply_smart_fingerprint(
         the check. Default ``"US"``.
     geo_timeout / geo_retries : float / int
         Forwarded to :func:`fetch_geo_info`.
+    manual_geo : GeoInfo or dict, optional
+        Explicit fallback used only when every online geo source fails.
+        Required mapping fields: ``ip``, ``country_code``, ``timezone``,
+        ``latitude`` and ``longitude``. Optional fields: ``country``,
+        ``region``, ``city`` and ``ipv6``.
     fetch_ipv6 : bool
         Whether to attempt IPv6 enrichment.
     fingerprints_path / region_locales_path : str, optional
@@ -1348,13 +1502,27 @@ def apply_smart_fingerprint(
     proxies = build_proxies_dict(proxy_host, proxy_port, proxy_user, proxy_pwd)
 
     # 2) geo (with optional country gate)
-    geo = fetch_geo_info(
-        proxies,
-        require_country=require_country,
-        timeout=geo_timeout,
-        retries_per_source=geo_retries,
-        logger=log,
-    )
+    try:
+        geo = fetch_geo_info(
+            proxies,
+            require_country=require_country,
+            timeout=geo_timeout,
+            retries_per_source=geo_retries,
+            logger=log,
+        )
+    except CountryMismatchError:
+        raise
+    except GeoError as e:
+        if manual_geo is None:
+            raise GeoError(
+                str(e)
+                + ". Please provide manual_geo with required fields: "
+                + "ip, country_code, timezone, latitude, longitude. "
+                + "Optional fields: country, region, city, ipv6."
+            )
+        geo = coerce_manual_geo(manual_geo, require_country=require_country)
+        log("[fp] geo lookup failed; using manual_geo cc={} tz={} ip={}".format(
+            geo.country_code, geo.timezone, _mask_ip(geo.ip)))
 
     # 3) optional ipv6
     if fetch_ipv6:

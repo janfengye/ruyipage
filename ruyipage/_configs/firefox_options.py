@@ -503,7 +503,7 @@ class FirefoxOptions(object):
         基于 ``firefox-fingerprintBrowser`` 内核与 ruyipage 内置的 22 套
         Windows 真机硬件特征 + 30 国语言映射，自动完成：
 
-        1. 出口 IP / 地理位置探测（5 个数据源回退，可选 IPv6 富化）；
+        1. 出口 IP / 地理位置探测（10 个数据源回退，可选 IPv6 富化）；
         2. 国家校验（``require_country`` 不匹配直接抛 ``CountryMismatchError``）；
         3. 随机抽取硬件指纹 + 拼装 Firefox 151 ±2 UA + 随机 canvas 种子；
         4. 写入符合内核 ``key:value`` 字段顺序的 ``fpfile.txt``；
@@ -511,7 +511,10 @@ class FirefoxOptions(object):
 
         所有关键字参数透传到 :func:`ruyipage.apply_smart_fingerprint`，常用
         参数包括 ``proxy_host`` / ``proxy_port`` / ``proxy_user`` / ``proxy_pwd``
-        / ``require_country`` / ``base_dir`` / ``logger`` 等。
+        / ``require_country`` / ``manual_geo`` / ``base_dir`` / ``logger`` 等。
+        当 10 个在线 Geo 数据源全部失败时，可通过 ``manual_geo`` 显式指定
+        ``ip`` / ``country_code`` / ``timezone`` / ``latitude`` / ``longitude``
+        继续生成指纹；如果在线 Geo 成功，优先使用在线结果。
 
         Returns:
             FingerprintContext: 指纹上下文。可调用 ``ctx.apply_emulation(page)``
@@ -530,6 +533,13 @@ class FirefoxOptions(object):
                 proxy_host="proxy.example.com", proxy_port=8080,
                 proxy_user="u", proxy_pwd="p",
                 require_country="US",
+                manual_geo={
+                    "ip": "75.166.187.10",
+                    "country_code": "US",
+                    "timezone": "America/Denver",
+                    "latitude": 39.7392,
+                    "longitude": -104.9903,
+                },
                 logger=print,
             )
             page = FirefoxPage(opts)

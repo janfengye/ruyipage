@@ -11,8 +11,8 @@ This subpackage glues together:
 * a bundled pool of 22 Windows hardware profiles;
 * a bundled mapping of 30+ countries to language / Accept-Language /
   Microsoft speech voice configurations;
-* a multi-source egress IP geo lookup (geojs / ipapi / ipwho /
-  ip-api / ipinfo) plus best-effort IPv6 enrichment.
+* a 10-source egress IP geo lookup (geojs / ipapi / ipwho /
+  ip-api / ipinfo / etc.) plus best-effort IPv6 enrichment.
 
 The single entry point is :func:`apply_smart_fingerprint`. The other
 exports allow advanced callers to compose the same pipeline manually.
@@ -23,6 +23,7 @@ Public API
 * :class:`FingerprintContext` - bundle of state returned by the helper,
   with :meth:`apply_emulation` for BiDi emulation overlays.
 * :func:`fetch_geo_info` / :func:`fetch_public_ipv6` - low-level lookup.
+* :func:`coerce_manual_geo` - validate explicit user-provided geo fallback.
 * :func:`pick_fingerprint` / :func:`write_fpfile` - compose / persist.
 * :func:`build_proxies_dict` - tiny utility for ``requests`` proxies.
 * :func:`list_hardware_profiles` / :func:`get_country_profile` -
@@ -41,6 +42,7 @@ from .builder import (
     # building blocks
     fetch_geo_info,
     fetch_public_ipv6,
+    coerce_manual_geo,
     pick_fingerprint,
     write_fpfile,
     build_proxies_dict,
@@ -66,6 +68,7 @@ __all__ = [
     "FingerprintContext",
     "fetch_geo_info",
     "fetch_public_ipv6",
+    "coerce_manual_geo",
     "pick_fingerprint",
     "write_fpfile",
     "build_proxies_dict",

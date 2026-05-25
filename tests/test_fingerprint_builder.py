@@ -27,6 +27,7 @@ from ruyipage._fingerprint.builder import (
     HardwareProfile,
     apply_smart_fingerprint,
     build_proxies_dict,
+    coerce_manual_geo,
     fetch_geo_info,
     fetch_public_ipv6,
     get_country_profile,
@@ -130,6 +131,14 @@ def test_build_proxies_dict_variants():
     assert pd["http"].startswith("http://u:p@")
 
 
+def test_geo_sources_have_registered_parsers():
+    assert len(builder._GEO_SOURCES) == 10
+    tags = [tag for tag, _url, _parser_key in builder._GEO_SOURCES]
+    assert len(tags) == len(set(tags))
+    for _tag, _url, parser_key in builder._GEO_SOURCES:
+        assert parser_key in builder._PARSERS
+
+
 # ---------------------------------------------------------------------------
 # 4) fetch_geo_info: source fall-back chain
 # ---------------------------------------------------------------------------
@@ -163,6 +172,122 @@ def test_fetch_geo_info_fallback_to_second_source():
     assert geo.source == "ipapi"
 
 
+def test_fetch_geo_info_fallback_to_late_source():
+    failures = [IOError("boom") for _ in range(8)]
+    payloads = failures + [
+        {
+            "ipAddress": "203.0.113.88",
+            "countryCode": "US",
+            "countryName": "United States",
+            "regionName": "California",
+            "cityName": "Los Angeles",
+            "timeZone": "America/Los_Angeles",
+            "latitude": 34.0522,
+            "longitude": -118.2437,
+        },
+    ]
+
+    def fake_http(url: str, proxies: Any, timeout: float) -> Dict[str, Any]:
+        item = payloads.pop(0)
+        if isinstance(item, Exception):
+            raise item
+        return item
+
+    with mock.patch.object(builder, "_http_get_json", side_effect=fake_http):
+        geo = fetch_geo_info(timeout=1.0, retries_per_source=0)
+
+    assert geo.ip == "203.0.113.88"
+    assert geo.country_code == "US"
+    assert geo.source == "freeipapi"
+
+
+def test_new_geo_source_parsers():
+    cases = [
+        (
+            "ipapi_is",
+            {
+                "ip": "203.0.113.1",
+                "location": {
+                    "country_code": "US",
+                    "country": "United States",
+                    "state": "California",
+                    "city": "Los Angeles",
+                    "timezone": "America/Los_Angeles",
+                    "latitude": 34.0522,
+                    "longitude": -118.2437,
+                },
+            },
+            "ipapi-is",
+        ),
+        (
+            "ip_guide",
+            {
+                "ip": "203.0.113.2",
+                "network": {"autonomous_system": {"country": "US"}},
+                "location": {
+                    "country": "United States",
+                    "region": "Colorado",
+                    "city": "Denver",
+                    "timezone": "America/Denver",
+                    "latitude": "39.7392",
+                    "longitude": "-104.9903",
+                },
+            },
+            "ip-guide",
+        ),
+        (
+            "ipwhois_app",
+            {
+                "ip": "203.0.113.3",
+                "country_code": "US",
+                "country": "United States",
+                "region": "New York",
+                "city": "New York",
+                "timezone": "America/New_York",
+                "latitude": 40.7128,
+                "longitude": -74.006,
+            },
+            "ipwhois-app",
+        ),
+        (
+            "freeipapi",
+            {
+                "ipAddress": "203.0.113.4",
+                "countryCode": "US",
+                "countryName": "United States",
+                "regionName": "Washington",
+                "cityName": "Seattle",
+                "timeZones": ["America/Los_Angeles"],
+                "latitude": 47.6062,
+                "longitude": -122.3321,
+            },
+            "freeipapi",
+        ),
+        (
+            "reallyfreegeoip",
+            {
+                "ip": "203.0.113.5",
+                "country_code": "US",
+                "country_name": "United States",
+                "region_name": "Texas",
+                "city": "Dallas",
+                "time_zone": "America/Chicago",
+                "latitude": 32.7767,
+                "longitude": -96.797,
+            },
+            "reallyfreegeoip",
+        ),
+    ]
+
+    for parser_key, payload, source in cases:
+        geo = builder._PARSERS[parser_key](payload)
+        assert geo.ip.startswith("203.0.113.")
+        assert geo.country_code == "US"
+        assert geo.timezone.startswith("America/")
+        assert geo.source == source
+        builder._validate_geo(geo)
+
+
 # ---------------------------------------------------------------------------
 # 5) fetch_geo_info: country gate
 # ---------------------------------------------------------------------------
@@ -194,6 +319,40 @@ def test_fetch_geo_info_all_sources_fail():
     ):
         with pytest.raises(GeoError):
             fetch_geo_info(timeout=0.5, retries_per_source=0)
+
+
+def test_coerce_manual_geo_from_mapping():
+    geo = coerce_manual_geo({
+        "ip": "75.166.187.10",
+        "country_code": "us",
+        "timezone": "America/Denver",
+        "latitude": "39.7392",
+        "longitude": "-104.9903",
+        "country": "United States",
+        "region": "Colorado",
+        "city": "Denver",
+    }, require_country="US")
+
+    assert geo.country_code == "US"
+    assert geo.source == "manual"
+    assert geo.latitude == 39.7392
+    assert geo.longitude == -104.9903
+
+
+def test_coerce_manual_geo_requires_fields():
+    with pytest.raises(GeoError, match="manual_geo missing required fields"):
+        coerce_manual_geo({"ip": "75.166.187.10", "country_code": "US"})
+
+
+def test_coerce_manual_geo_enforces_required_country():
+    with pytest.raises(CountryMismatchError):
+        coerce_manual_geo({
+            "ip": "75.166.187.10",
+            "country_code": "CA",
+            "timezone": "America/Toronto",
+            "latitude": 43.6532,
+            "longitude": -79.3832,
+        }, require_country="US")
 
 
 # ---------------------------------------------------------------------------
@@ -479,6 +638,65 @@ def test_apply_smart_fingerprint_full_pipeline(tmp_path):
 
     # userdir under provided base_dir
     assert os.path.commonpath([ctx.userdir, str(tmp_path)]) == str(tmp_path)
+
+
+def test_apply_smart_fingerprint_uses_online_geo_before_manual_geo(tmp_path):
+    online_geo = _make_geo(ip="203.0.113.45", source="geojs")
+
+    with mock.patch.object(builder, "fetch_geo_info", return_value=online_geo), \
+            mock.patch.object(builder, "fetch_public_ipv6", return_value=None):
+        ctx = apply_smart_fingerprint(
+            _StubOptions(),
+            base_dir=str(tmp_path),
+            require_country="US",
+            manual_geo={
+                "ip": "75.166.187.10",
+                "country_code": "US",
+                "timezone": "America/Denver",
+                "latitude": 39.7392,
+                "longitude": -104.9903,
+            },
+            fetch_ipv6=False,
+            rng=random.Random(123),
+        )
+
+    assert ctx.geo.ip == "203.0.113.45"
+    assert ctx.geo.source == "geojs"
+
+
+def test_apply_smart_fingerprint_falls_back_to_manual_geo(tmp_path):
+    with mock.patch.object(builder, "fetch_geo_info", side_effect=GeoError("boom")), \
+            mock.patch.object(builder, "fetch_public_ipv6", return_value=None):
+        ctx = apply_smart_fingerprint(
+            _StubOptions(),
+            base_dir=str(tmp_path),
+            require_country="US",
+            manual_geo={
+                "ip": "75.166.187.10",
+                "country_code": "US",
+                "timezone": "America/Denver",
+                "latitude": 39.7392,
+                "longitude": -104.9903,
+                "city": "Denver",
+            },
+            fetch_ipv6=False,
+            rng=random.Random(123),
+        )
+
+    assert ctx.geo.ip == "75.166.187.10"
+    assert ctx.geo.source == "manual"
+    assert ctx.geo.city == "Denver"
+
+
+def test_apply_smart_fingerprint_prompts_for_manual_geo(tmp_path):
+    with mock.patch.object(builder, "fetch_geo_info", side_effect=GeoError("boom")):
+        with pytest.raises(GeoError, match="Please provide manual_geo"):
+            apply_smart_fingerprint(
+                _StubOptions(),
+                base_dir=str(tmp_path),
+                require_country="US",
+                fetch_ipv6=False,
+            )
 
 
 # ---------------------------------------------------------------------------
