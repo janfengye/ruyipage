@@ -324,3 +324,35 @@ def set_bypass_csp(driver, context, enabled=True):
     return driver.run(
         "browsingContext.setBypassCSP", {"context": context, "enabled": enabled}
     )
+
+
+def start_screencast(driver, context, mime_type=None, stream_options=None):
+    """开始录制指定顶层浏览上下文的 screencast。
+
+    Args:
+        context: 目标 top-level browsingContext ID。
+        mime_type: 可选输出 MIME 类型，例如 ``"video/webm"``。
+        stream_options: 可选媒体流配置。
+            结构示例：``{"video": {"width": 1280, "height": 720, "frameRate": 30}, "audio": False}``。
+
+    Returns:
+        dict: ``{"screencast": str, "path": str}``。
+    """
+    params = {"context": context}
+    if mime_type is not None:
+        params["mimeType"] = mime_type
+    if stream_options is not None:
+        params["streamOptions"] = stream_options
+    return driver.run("browsingContext.startScreencast", params)
+
+
+def stop_screencast(driver, screencast):
+    """停止 screencast 录制。
+
+    Args:
+        screencast: ``start_screencast()`` 返回的 screencast ID。
+
+    Returns:
+        dict: ``{"path": str}``，失败时可能包含 ``error`` 字段。
+    """
+    return driver.run("browsingContext.stopScreencast", {"screencast": screencast})

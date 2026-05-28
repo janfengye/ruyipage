@@ -766,6 +766,48 @@ page.get("https://ipinfo.io/json")
 - 希望业务层只保留最小代理配置入口
 - 想让代理用户名密码完全留在 `fpfile` 中，而不是写进业务脚本
 
+#### Per-tab SOCKS5 代理池：`set_per_tab_proxies()` + `new_container_tabs()`
+
+如果你的 Firefox 指纹内核已经支持 `proxy.rotate.*`，ruyipage 现在可以直接帮你：
+
+1. 生成运行期 session fpfile；
+2. 写入 `proxy.rotate.enabled=true` / `proxy.rotate.exhausted=...` / 多条 `proxy.rotate.proxy=...`；
+3. 创建真正的 Firefox container tabs；
+4. 让每个 container tab 使用不同的 SOCKS5 密码代理。
+
+最简写法：
+
+```python
+from ruyipage import FirefoxOptions, FirefoxPage
+
+proxies = [
+    "proxy.example.com:1000:user1:pass1",
+    "proxy.example.com:1000:user2:pass2",
+    "proxy.example.com:1000:user3:pass3",
+]
+
+opts = FirefoxOptions()
+opts.set_browser_path(r"C:\firefox\firefox.exe")
+opts.set_per_tab_proxies(proxies, exhausted="wrap")
+
+page = FirefoxPage(opts)
+tabs = page.new_container_tabs(count=len(proxies), url="https://browserscan.net/")
+```
+
+可接受的代理格式：
+
+- `host:port:username:password`
+- `socks5://host:port:username:password`
+
+说明：
+
+- `set_per_tab_proxies()` 会在 profile 目录中自动生成 session fpfile，不会直接修改你原始的 fpfile。
+- 如果你已经先调用了 `set_fpfile()`，ruyipage 会复制原始 fpfile 的内容，再追加 `proxy.rotate.*` 配置。
+- `new_container_tabs()` 通过 Firefox BiDi `browser.createUserContext` + `browsingContext.create(userContext=...)` 创建 container tabs，不要求用户自己安装额外扩展。
+- 这个能力依赖你们的定制 Firefox 内核；普通官方 Firefox 不保证支持 `proxy.rotate.*`。
+
+完整示例见：`examples/52_per_tab_socks5_proxy_browserscan.py`
+
 ---
 
 ## 最常用 API 文档
@@ -1606,6 +1648,7 @@ page.extensions.uninstall(ext_id)
 - `42_3_debug_px_context_probe.py` 直接打开 `debug_px.html`，打印 PX challenge iframe 的 browsing context 树，并尝试 attach 到 child context 做最小 DOM / canvas 诊断
 - `46_human_behavior_showcase.py` 演示 bezier / windmouse 两套拟人轨迹算法，并开启鼠标行为可视化
 - `48_smart_fingerprint.py` 演示 `apply_smart_fingerprint()` 一站式智能指纹（geo 探测 + 内核 fpfile + BiDi 仿真）
+- `52_per_tab_socks5_proxy_browserscan.py` 单浏览器创建多个 container tabs，并让每个 tab 走不同 SOCKS5 密码代理
 
 ---
 

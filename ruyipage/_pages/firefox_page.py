@@ -105,17 +105,26 @@ class FirefoxPage(FirefoxBase):
         """最新的标签页"""
         return self._firefox.latest_tab
 
-    def new_tab(self, url=None, background=False) -> "FirefoxTab":
+    def new_tab(self, url=None, background=False, user_context=None) -> "FirefoxTab":
         """新建标签页
 
         Args:
             url: 初始 URL
             background: 后台创建
+            user_context: 可选的 Firefox user context ID
 
         Returns:
             FirefoxTab
         """
-        return self._firefox.new_tab(url, background)
+        return self._firefox.new_tab(url, background, user_context=user_context)
+
+    def new_container_tab(self, url=None, background=False) -> "FirefoxTab":
+        """新建一个 Firefox container tab。"""
+        return self._firefox.new_container_tab(url=url, background=background)
+
+    def new_container_tabs(self, count, url=None, background=False) -> "list[FirefoxTab]":
+        """新建多个 Firefox container tabs。"""
+        return self._firefox.new_container_tabs(count=count, url=url, background=background)
 
     def get_tab(self, id_or_num=None, title=None, url=None) -> "FirefoxTab":
         """获取标签页

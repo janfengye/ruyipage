@@ -59,6 +59,10 @@ class FirefoxOptions(object):
         self._auto_port = False
         self._user_context = None  # 容器标签页
         self._fpfile = None  # 指纹配置文件路径
+        self._source_fpfile = None  # 用户显式传入的原始 fpfile 路径
+        self._runtime_fpfile = None  # 运行期生成的 session fpfile 路径
+        self._per_tab_proxies = []  # 规范化后的 proxy.rotate.proxy 列表
+        self._per_tab_proxy_exhausted = "wrap"  # proxy.rotate.exhausted
         self._private_mode = False  # Firefox 私密浏览模式
         self._user_prompt_handler = None  # session.UserPromptHandler
         self._xpath_picker_enabled = False  # 页面 XPath 选择浮窗
@@ -147,6 +151,16 @@ class FirefoxOptions(object):
     def fpfile(self):
         """指纹配置文件路径"""
         return self._fpfile
+
+    @property
+    def per_tab_proxies(self):
+        """per-tab SOCKS5 代理列表（规范化后的 socks5://...）。"""
+        return self._per_tab_proxies[:]
+
+    @property
+    def per_tab_proxy_exhausted(self):
+        """per-tab 代理耗尽策略。"""
+        return self._per_tab_proxy_exhausted
 
     @property
     def is_private_mode(self):
@@ -494,8 +508,92 @@ class FirefoxOptions(object):
         Returns:
             self
         """
+        self._source_fpfile = path
         self._fpfile = path
+        self._runtime_fpfile = None
         return self
+
+    def set_per_tab_proxies(self, proxies, exhausted="wrap"):
+        """设置 per-tab SOCKS5 代理池。
+
+        该能力依赖定制 Firefox 内核读取 ``proxy.rotate.*`` fpfile 配置，
+        并按 container tab 的 userContextId 为每个 tab 分配不同代理。
+
+        Args:
+            proxies: 代理列表。每项支持以下格式：
+                - ``"host:port:username:password"``
+                - ``"socks5://host:port:username:password"``
+            exhausted: 代理耗尽策略。
+                可选 ``"wrap"``、``"direct"``、``"none"``、``"stop"``。
+
+        Returns:
+            self
+        """
+        allowed = {"wrap", "direct", "none", "stop"}
+        exhausted = str(exhausted or "wrap").strip().lower()
+        if exhausted not in allowed:
+            raise ValueError(
+                "exhausted 必须是 'wrap'、'direct'、'none' 或 'stop'"
+            )
+
+        normalized = []
+        for proxy in proxies or []:
+            normalized.append(self._normalize_per_tab_proxy(proxy))
+
+        if not normalized:
+            raise ValueError("per-tab 代理列表不能为空")
+
+        self._per_tab_proxies = normalized
+        self._per_tab_proxy_exhausted = exhausted
+        self._runtime_fpfile = None
+        return self
+
+    def set_proxy_rotate(self, proxies, exhausted="wrap"):
+        """``set_per_tab_proxies()`` 的新手友好别名。"""
+        return self.set_per_tab_proxies(proxies, exhausted=exhausted)
+
+    def prepare_runtime_files(self):
+        """在 profile 就绪后生成运行期 session fpfile。"""
+        if not self._per_tab_proxies:
+            return
+
+        if not self._profile_path:
+            raise ValueError("prepare_runtime_files() 需要先设置 profile_path")
+
+        session_fpfile = os.path.join(
+            self._profile_path, "ruyipage_per_tab_proxy_fp.txt"
+        )
+
+        source_lines = []
+        if self._source_fpfile:
+            source_path = os.path.abspath(self._source_fpfile)
+            if not os.path.exists(source_path):
+                raise FileNotFoundError("fpfile 不存在: {}".format(source_path))
+            with open(source_path, "r", encoding="utf-8", errors="ignore") as f:
+                source_lines = f.read().splitlines()
+
+        lines = []
+        for raw_line in source_lines:
+            if self._should_omit_per_tab_proxy_line(raw_line):
+                continue
+            lines.append(raw_line)
+
+        if lines and lines[-1].strip():
+            lines.append("")
+
+        lines.append("proxy.rotate.enabled=true")
+        lines.append(
+            "proxy.rotate.exhausted={}".format(self._per_tab_proxy_exhausted)
+        )
+        for proxy in self._per_tab_proxies:
+            lines.append("proxy.rotate.proxy={}".format(proxy))
+
+        os.makedirs(self._profile_path, exist_ok=True)
+        with open(session_fpfile, "w", encoding="utf-8") as f:
+            f.write("\n".join(lines).rstrip() + "\n")
+
+        self._runtime_fpfile = session_fpfile
+        self._fpfile = session_fpfile
 
     def smart_fingerprint(self, **kwargs):
         """一站式智能指纹配置（链式调用入口）。
@@ -714,6 +812,63 @@ class FirefoxOptions(object):
             "username": username or "",
             "password": password or "",
         }
+
+    def _normalize_per_tab_proxy(self, proxy):
+        value = str(proxy or "").strip()
+        if not value:
+            raise ValueError("per-tab 代理项不能为空")
+
+        if value.lower().startswith("socks5://"):
+            value = value[len("socks5://") :]
+        elif "://" in value:
+            raise ValueError("per-tab 代理仅支持 socks5:// 或 host:port:username:password")
+
+        parts = value.split(":")
+        if len(parts) != 4:
+            raise ValueError(
+                "per-tab 代理格式必须是 host:port:username:password 或 socks5://host:port:username:password"
+            )
+
+        host, port_text, username, password = [p.strip() for p in parts]
+        if not host:
+            raise ValueError("per-tab 代理 host 不能为空")
+        try:
+            port = int(port_text)
+        except (TypeError, ValueError):
+            raise ValueError("per-tab 代理端口必须是整数")
+        if port <= 0 or port > 65535:
+            raise ValueError("per-tab 代理端口必须在 1..65535 之间")
+        if not username:
+            raise ValueError("per-tab 代理 username 不能为空")
+        if not password:
+            raise ValueError("per-tab 代理 password 不能为空")
+        if ":" in username or ":" in password:
+            raise ValueError("per-tab 代理 username/password 里不能包含冒号")
+
+        return "socks5://{}:{}:{}:{}".format(host, port, username, password)
+
+    def _should_omit_per_tab_proxy_line(self, raw_line):
+        line = str(raw_line or "").strip()
+        if not line or line.startswith("#") or line.startswith("//"):
+            return False
+
+        delimiter_positions = [
+            pos for pos in (line.find(":"), line.find("=")) if pos != -1
+        ]
+        if not delimiter_positions:
+            return False
+
+        key = line[: min(delimiter_positions)].strip().lower()
+        omit = {
+            "proxy.rotate.enabled",
+            "proxy.rotate.exhausted",
+            "proxy.rotate.proxy",
+            "httpproxy.rotate.enabled",
+            "httpproxy.rotate.exhausted",
+            "httpproxy.rotate.proxy",
+            "socks5proxy.rotate.proxy",
+        }
+        return key in omit
 
     def _read_httpauth_from_fpfile(self, path):
         """从 fpfile 中读取代理认证字段。"""
@@ -1041,7 +1196,7 @@ class FirefoxOptions(object):
 
         # 代理设置
         proxy = self._proxy
-        if not proxy:
+        if not proxy and not self._per_tab_proxies:
             socks5_proxy = self._read_socks5_proxy_from_fpfile(self._fpfile)
             if socks5_proxy:
                 proxy = "socks5://{}:{}".format(

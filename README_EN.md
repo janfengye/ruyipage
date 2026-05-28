@@ -769,6 +769,48 @@ Suitable for:
 - keeping business-layer proxy setup minimal
 - keeping proxy usernames and passwords inside `fpfile` instead of hardcoding them in scripts
 
+#### Per-tab SOCKS5 proxy pool: `set_per_tab_proxies()` + `new_container_tabs()`
+
+If your Firefox fingerprint kernel already supports `proxy.rotate.*`, ruyipage can now directly:
+
+1. generate a runtime session fpfile;
+2. write `proxy.rotate.enabled=true`, `proxy.rotate.exhausted=...`, and multiple `proxy.rotate.proxy=...` lines;
+3. create real Firefox container tabs;
+4. let each container tab use a different SOCKS5 password proxy.
+
+Minimal usage:
+
+```python
+from ruyipage import FirefoxOptions, FirefoxPage
+
+proxies = [
+    "proxy.example.com:1000:user1:pass1",
+    "proxy.example.com:1000:user2:pass2",
+    "proxy.example.com:1000:user3:pass3",
+]
+
+opts = FirefoxOptions()
+opts.set_browser_path(r"C:\firefox\firefox.exe")
+opts.set_per_tab_proxies(proxies, exhausted="wrap")
+
+page = FirefoxPage(opts)
+tabs = page.new_container_tabs(count=len(proxies), url="https://browserscan.net/")
+```
+
+Accepted proxy formats:
+
+- `host:port:username:password`
+- `socks5://host:port:username:password`
+
+Notes:
+
+- `set_per_tab_proxies()` automatically generates a session fpfile inside the profile directory and does not modify your original fpfile directly.
+- If you already called `set_fpfile()` first, ruyipage copies the original fpfile content and then appends the `proxy.rotate.*` entries.
+- `new_container_tabs()` uses Firefox BiDi `browser.createUserContext` + `browsingContext.create(userContext=...)` to create container tabs; users do not need to install any extra extension themselves.
+- This capability depends on your custom Firefox kernel. Official stock Firefox does not guarantee support for `proxy.rotate.*`.
+
+Full example: `examples/52_per_tab_socks5_proxy_browserscan.py`
+
 ---
 
 ## Most Common API Guide
@@ -1568,6 +1610,7 @@ Suggested order:
 - `39_attach_exist_browser.py` auto-detect an attachable instance, then take over the already-open Firefox / fingerprint browser
 - `42_xpath_picker_complex_showcase.py` starts XPath picker and opens a showcase page with complex nodes, shadow roots, and nested iframes
 - `46_human_behavior_showcase.py` demonstrates both bezier and windmouse human cursor algorithms with action visualization enabled
+- `52_per_tab_socks5_proxy_browserscan.py` single browser, multiple container tabs, each tab using a different SOCKS5 password proxy
 
 ---
 

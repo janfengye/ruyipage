@@ -786,12 +786,13 @@ class Firefox(object):
             result.append(tab)
         return result
 
-    def new_tab(self, url=None, background=False):
+    def new_tab(self, url=None, background=False, user_context=None):
         """新建标签页
 
         Args:
             url: 初始 URL
             background: 是否在后台创建
+            user_context: 可选的 Firefox user context ID
 
         Returns:
             FirefoxTab
@@ -800,6 +801,8 @@ class Firefox(object):
         params = {"type": "tab", "background": background}
         if ref_ctx:
             params["referenceContext"] = ref_ctx
+        if user_context:
+            params["userContext"] = user_context
 
         result = self._driver.run("browsingContext.create", params)
         ctx_id = result.get("context", "")
@@ -813,6 +816,23 @@ class Firefox(object):
             tab.get(url)
 
         return tab
+
+    def new_container_tab(self, url=None, background=False):
+        """创建一个新的 Firefox container tab。"""
+        result = self._driver.run("browser.createUserContext")
+        user_context = result.get("userContext", "")
+        return self.new_tab(url=url, background=background, user_context=user_context)
+
+    def new_container_tabs(self, count, url=None, background=False):
+        """创建多个 Firefox container tabs。"""
+        count = int(count)
+        if count <= 0:
+            raise ValueError("count 必须大于 0")
+
+        tabs = []
+        for _ in range(count):
+            tabs.append(self.new_container_tab(url=url, background=background))
+        return tabs
 
     def activate_tab(self, id_ind_tab):
         """激活标签页
@@ -1358,6 +1378,9 @@ class Firefox(object):
 
         # 如果设置了 fpfile，将文件路径写入环境变量或通过命令行传递
         # fpfile 会通过 build_command() 自动包含在命令行中
+
+        # 如果配置了 per-tab 代理池，这里生成 session fpfile，避免修改用户原始 fpfile。
+        opts.prepare_runtime_files()
 
         # 写入首选项
         opts.write_prefs_to_profile()
