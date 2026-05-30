@@ -3,6 +3,16 @@
 from unittest import mock
 
 from ruyipage import FirefoxOptions, launch
+from ruyipage._base.browser import Firefox
+from ruyipage._bidi import network as bidi_network
+
+
+class _ProxyAuthOptions:
+    def __init__(self, credentials):
+        self._credentials = credentials
+
+    def _get_proxy_auth_credentials(self):
+        return self._credentials
 
 
 def test_quick_start_sets_proxy():
@@ -167,3 +177,42 @@ def test_launch_prefers_resolved_runtime_when_no_browser_path():
 
     opts = created_opts["opts"]
     assert opts.browser_path == "D:/runtime/firefox.exe"
+
+
+def test_proxy_auth_uses_credentials_for_407_without_challenge_source(monkeypatch):
+    browser = Firefox.__new__(Firefox)
+    browser._options = _ProxyAuthOptions({"username": "user-value", "password": "pass-value"})
+    browser._driver = object()
+    calls = []
+
+    def fake_continue_with_auth(driver, request_id, action="default", credentials=None):
+        calls.append(
+            {
+                "driver": driver,
+                "request_id": request_id,
+                "action": action,
+                "credentials": credentials,
+            }
+        )
+
+    monkeypatch.setattr(bidi_network, "continue_with_auth", fake_continue_with_auth)
+
+    browser._on_proxy_auth_required(
+        {
+            "request": {"request": "request-1", "url": "https://example.com/"},
+            "response": {"status": 407},
+        }
+    )
+
+    assert calls == [
+        {
+            "driver": browser._driver,
+            "request_id": "request-1",
+            "action": "provideCredentials",
+            "credentials": {
+                "type": "password",
+                "username": "user-value",
+                "password": "pass-value",
+            },
+        }
+    ]

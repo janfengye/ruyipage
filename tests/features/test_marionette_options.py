@@ -38,6 +38,18 @@ class TestFirefoxOptionsMarionette:
         content = _read_text(tmp_path / "user.js")
         assert 'user_pref("marionette.enabled", true);' in content
 
+    def test_write_prefs_disables_heavy_new_tab_ui_defaults(self, tmp_path):
+        opts = FirefoxOptions().set_profile(str(tmp_path))
+
+        opts.write_prefs_to_profile()
+
+        content = _read_text(tmp_path / "user.js")
+        assert 'user_pref("browser.newtabpage.enabled", false);' in content
+        assert 'user_pref("browser.newtabpage.activity-stream.feeds.topsites", false);' in content
+        assert 'user_pref("browser.newtabpage.activity-stream.feeds.section.topstories", false);' in content
+        assert 'user_pref("browser.tabs.animate", false);' in content
+        assert "toolkit.cosmeticAnimations.enabled" not in content
+
     def test_quick_start_can_disable_marionette(self):
         opts = FirefoxOptions().quick_start(marionette=False)
 

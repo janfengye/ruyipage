@@ -1183,6 +1183,12 @@ class FirefoxOptions(object):
         prefs.setdefault("browser.startup.homepage_override.mstone", "ignore")
         prefs.setdefault("browser.tabs.warnOnClose", False)
         prefs.setdefault("browser.warnOnQuit", False)
+        prefs.setdefault("browser.newtabpage.enabled", False)
+        prefs.setdefault("browser.newtabpage.activity-stream.feeds.topsites", False)
+        prefs.setdefault(
+            "browser.newtabpage.activity-stream.feeds.section.topstories", False
+        )
+        prefs.setdefault("browser.tabs.animate", False)
         # 仅在显式启用时才写入该 pref，避免某些环境因 Marionette 启动异常
         # 而在浏览器尚未建立 BiDi 连接前就崩溃/闪退。
         if self._marionette_enabled:

@@ -1347,7 +1347,13 @@ class Firefox(object):
         challenge = params.get("authChallenge") or {}
         source = str(challenge.get("source") or params.get("source") or "").lower()
         realm = str(params.get("realm") or challenge.get("realm") or "")
-        is_proxy = source == "proxy" or "proxy" in realm.lower()
+        response = params.get("response") or {}
+        status = response.get("status") if isinstance(response, dict) else None
+        try:
+            status = int(status)
+        except (TypeError, ValueError):
+            status = None
+        is_proxy = source == "proxy" or "proxy" in realm.lower() or status == 407
 
         if is_proxy:
             bidi_network.continue_with_auth(
