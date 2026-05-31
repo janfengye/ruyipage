@@ -5,6 +5,7 @@
 """
 
 import logging
+import time
 from typing import TYPE_CHECKING
 
 from .firefox_base import FirefoxBase
@@ -15,8 +16,16 @@ if TYPE_CHECKING:
 from .._base.browser import Firefox
 from .._configs.firefox_options import FirefoxOptions
 from .._bidi import browsing_context as bidi_context
+from ..errors import BrowserConnectError
 
 logger = logging.getLogger("ruyipage")
+
+_INITIAL_CONTEXT_WAIT_TIMEOUT = 3.0
+_INITIAL_CONTEXT_POLL_INTERVAL = 0.1
+
+
+def _is_valid_context_id(context_id):
+    return isinstance(context_id, str) and bool(context_id)
 
 
 class FirefoxPage(FirefoxBase):
@@ -75,15 +84,28 @@ class FirefoxPage(FirefoxBase):
         self._firefox = Firefox(addr_or_opts)
 
         # 获取第一个标签页的 context
-        tab_ids = self._firefox.tab_ids
-        if tab_ids:
-            ctx_id = tab_ids[0]
-        else:
-            # 如果没有标签页，创建一个
-            result = bidi_context.create(self._firefox.driver, "tab")
-            ctx_id = result.get("context", "")
+        ctx_id = self._get_initial_context_id()
 
         self._init_context(self._firefox, ctx_id)
+
+    def _get_initial_context_id(self):
+        deadline = time.time() + _INITIAL_CONTEXT_WAIT_TIMEOUT
+        while time.time() < deadline:
+            tab_ids = [
+                ctx_id for ctx_id in self._firefox.tab_ids if _is_valid_context_id(ctx_id)
+            ]
+            if tab_ids:
+                return tab_ids[0]
+            time.sleep(_INITIAL_CONTEXT_POLL_INTERVAL)
+
+        for _ in range(3):
+            result = bidi_context.create(self._firefox.driver, "tab")
+            ctx_id = result.get("context", "")
+            if _is_valid_context_id(ctx_id):
+                return ctx_id
+            time.sleep(_INITIAL_CONTEXT_POLL_INTERVAL)
+
+        raise BrowserConnectError("无法获取可用的 Firefox browsingContext")
 
     @property
     def browser(self) -> "Firefox":

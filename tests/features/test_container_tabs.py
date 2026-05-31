@@ -1,8 +1,13 @@
 # -*- coding: utf-8 -*-
 
+import threading
+from types import SimpleNamespace
 from unittest import mock
 
+import pytest
+
 from ruyipage import FirefoxOptions, FirefoxPage
+from ruyipage.errors import BrowserConnectError
 
 
 def test_page_new_tab_forwards_user_context():
@@ -164,6 +169,144 @@ def test_browser_tab_ids_returns_copy_after_refresh():
     browser._refresh_tabs.assert_called_once_with()
     assert tab_ids == ["ctx-1", "ctx-2", "ctx-3"]
     assert browser._context_ids == ["ctx-1", "ctx-2"]
+
+
+def test_browser_refresh_tabs_filters_invalid_context_ids(monkeypatch):
+    from ruyipage._base.browser import Firefox
+    from ruyipage._bidi import browsing_context
+
+    browser = Firefox.__new__(Firefox)
+    browser._driver = object()
+    browser._context_ids = ["old-ctx"]
+    browser._context_ids_lock = threading.Lock()
+
+    monkeypatch.setattr(
+        browsing_context,
+        "get_tree",
+        lambda driver, max_depth=0: {
+            "contexts": [
+                {"context": None},
+                {"context": ""},
+                {"context": 123},
+                {"context": "ctx-1"},
+            ]
+        },
+    )
+
+    browser._refresh_tabs()
+
+    assert browser._context_ids == ["ctx-1"]
+
+
+def test_browser_try_connect_rejects_missing_context(monkeypatch):
+    from ruyipage._base.browser import Firefox
+    from ruyipage._configs.firefox_options import FirefoxOptions
+    import ruyipage._base.browser as browser_module
+
+    class FakeSocket:
+        timeout = None
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, tb):
+            return False
+
+        def settimeout(self, timeout):
+            self.timeout = timeout
+
+        def connect(self, address):
+            return None
+
+    fake_driver = mock.Mock()
+    fake_socket = FakeSocket()
+    browser = Firefox.__new__(Firefox)
+    browser._address = "127.0.0.1:9222"
+    browser._options = FirefoxOptions()
+    browser._session_id = None
+    browser._owns_session = False
+    browser._driver = None
+    browser._context_ids = []
+    browser._context_ids_lock = threading.Lock()
+    browser._reserved_port = None
+    browser._teardown_proxy_auth = mock.Mock()
+    browser._create_session = mock.Mock()
+    browser._subscribe_events = mock.Mock()
+    browser._setup_proxy_auth = mock.Mock()
+    browser._setup_download_behavior = mock.Mock()
+    browser._wait_for_initial_context = mock.Mock(return_value=False)
+
+    monkeypatch.setattr(browser_module.socket, "socket", lambda *args, **kwargs: fake_socket)
+    monkeypatch.setattr(browser_module, "get_bidi_ws_url", lambda *args, **kwargs: "ws")
+    monkeypatch.setattr(browser_module, "BrowserBiDiDriver", lambda address: fake_driver)
+
+    assert browser._try_connect() is False
+    assert fake_socket.timeout == 0.1
+    browser._wait_for_initial_context.assert_called_once_with()
+    fake_driver.stop.assert_called_once_with()
+
+
+def test_firefox_page_init_creates_valid_context_when_existing_tabs_invalid(monkeypatch):
+    from ruyipage._pages import firefox_page as page_module
+
+    fake_browser = mock.Mock()
+    fake_browser.tab_ids = []
+    fake_browser.driver = object()
+    fake_browser.options = SimpleNamespace(
+        load_mode="normal",
+        xpath_picker_enabled=False,
+        action_visual_enabled=False,
+        trace_enabled=False,
+        failure_snapshot_enabled=False,
+    )
+    created_contexts = []
+
+    monkeypatch.setattr(page_module, "Firefox", lambda addr_or_opts=None: fake_browser)
+    monkeypatch.setattr(page_module, "_INITIAL_CONTEXT_WAIT_TIMEOUT", 0)
+    monkeypatch.setattr(page_module, "_INITIAL_CONTEXT_POLL_INTERVAL", 0)
+    monkeypatch.setattr(
+        page_module.bidi_context,
+        "create",
+        lambda driver, type_: {"context": "ctx-new"},
+    )
+    monkeypatch.setattr(
+        page_module.FirefoxPage,
+        "_init_context",
+        lambda self, browser, context_id: created_contexts.append(context_id),
+    )
+
+    page = FirefoxPage.__new__(FirefoxPage)
+    FirefoxPage.__init__(page)
+
+    assert created_contexts == ["ctx-new"]
+
+
+def test_firefox_page_init_rejects_empty_created_context(monkeypatch):
+    from ruyipage._pages import firefox_page as page_module
+
+    fake_browser = mock.Mock()
+    fake_browser.tab_ids = []
+    fake_browser.driver = object()
+    fake_browser.options = SimpleNamespace(
+        load_mode="normal",
+        xpath_picker_enabled=False,
+        action_visual_enabled=False,
+        trace_enabled=False,
+        failure_snapshot_enabled=False,
+    )
+
+    monkeypatch.setattr(page_module, "Firefox", lambda addr_or_opts=None: fake_browser)
+    monkeypatch.setattr(page_module, "_INITIAL_CONTEXT_WAIT_TIMEOUT", 0)
+    monkeypatch.setattr(page_module, "_INITIAL_CONTEXT_POLL_INTERVAL", 0)
+    monkeypatch.setattr(
+        page_module.bidi_context,
+        "create",
+        lambda driver, type_: {"context": None},
+    )
+
+    page = FirefoxPage.__new__(FirefoxPage)
+    with pytest.raises(BrowserConnectError):
+        FirefoxPage.__init__(page)
 
 
 def test_browser_latest_tab_returns_last_context_or_none():

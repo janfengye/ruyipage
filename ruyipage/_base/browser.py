@@ -47,6 +47,14 @@ DEFAULT_FIREFOX_COMMANDLINE_PATTERNS = (
 )
 
 
+def _is_valid_context_id(context_id):
+    return isinstance(context_id, str) and bool(context_id)
+
+
+def _connect_timeout_for_host(host, default=2.0):
+    return 0.1 if host in ("127.0.0.1", "localhost", "::1") else default
+
+
 def _probe_bidi_address(address, timeout=1.0, keep_driver=False):
     """探测 address 是否为可接管的 Firefox BiDi 实例。"""
     host, port = address.rsplit(":", 1)
@@ -1079,14 +1087,8 @@ class Firefox(object):
             self._ensure_launch_port_available()
             self._launch_browser()
 
-        # 等待连接
-        for i in range(self._options.retry_times + 1):
-            try:
-                if self._try_connect():
-                    return
-            except BrowserConnectError:
-                pass
-            time.sleep(self._options.retry_interval)
+        if self._wait_for_connection():
+            return
 
         # 某些环境下首次启动后 remote debugging 端口就绪较慢，
         # 或出现短暂的僵尸会话，导致首轮重试全部失败。
@@ -1104,17 +1106,27 @@ class Firefox(object):
             with self._launch_lock:
                 self._ensure_launch_port_available()
                 self._launch_browser()
-            for i in range(self._options.retry_times + 1):
-                try:
-                    if self._try_connect():
-                        return
-                except BrowserConnectError:
-                    pass
-                time.sleep(self._options.retry_interval)
+            if self._wait_for_connection():
+                return
 
         raise BrowserConnectError(
             "启动后无法连接到 {}，请检查 Firefox 是否正常启动".format(self._address)
         )
+
+    def _wait_for_connection(self):
+        deadline = time.time() + max(
+            1.0,
+            float(self._options.retry_times + 1)
+            * float(self._options.retry_interval),
+        )
+        while time.time() < deadline:
+            try:
+                if self._try_connect():
+                    return True
+            except BrowserConnectError:
+                pass
+            time.sleep(min(0.2, max(0.01, deadline - time.time())))
+        return False
 
     def _kill_firefox_by_port(self, port):
         """通过 /proc 找到监听指定端口的进程并终止，避免误杀无关 Firefox。"""
@@ -1205,7 +1217,9 @@ class Firefox(object):
         """检查端口是否可达"""
         from .._functions.tools import is_port_open
         host, port_str = self._address.rsplit(":", 1)
-        return is_port_open(host, int(port_str), timeout=2)
+        return is_port_open(
+            host, int(port_str), timeout=_connect_timeout_for_host(host)
+        )
 
     def _ensure_launch_port_available(self):
         """启动前确保目标端口未被其他进程占用。"""
@@ -1236,7 +1250,7 @@ class Firefox(object):
         host, port = self._address.rsplit(":", 1)
         try:
             with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
-                sock.settimeout(2)
+                sock.settimeout(_connect_timeout_for_host(host))
                 sock.connect((host, int(port)))
         except (ConnectionRefusedError, socket.timeout, OSError):
             return False
@@ -1250,7 +1264,8 @@ class Firefox(object):
             self._subscribe_events()
             self._setup_proxy_auth()
             self._setup_download_behavior()
-            self._refresh_tabs()
+            if not self._wait_for_initial_context():
+                raise RuntimeError("Firefox 未返回可用的 browsingContext")
             self._release_reserved_port()
             logger.info("已连接到 Firefox: %s", self._address)
             return True
@@ -1280,6 +1295,16 @@ class Firefox(object):
                 self._driver = None
             self._release_reserved_port()
             return False
+
+    def _wait_for_initial_context(self, timeout=3.0, interval=0.1):
+        deadline = time.time() + timeout
+        while time.time() < deadline:
+            self._refresh_tabs()
+            if self._context_ids:
+                return True
+            time.sleep(min(interval, max(0.01, deadline - time.time())))
+        self._refresh_tabs()
+        return bool(self._context_ids)
 
     def _setup_proxy_auth(self):
         """启用浏览器级代理认证自动应答。"""
@@ -1443,9 +1468,6 @@ class Firefox(object):
             )
         except Exception as e:
             raise BrowserLaunchError("启动 Firefox 失败: {}".format(e))
-
-        # 等待端口就绪
-        time.sleep(1)
 
     def _create_session(self):
         """创建 BiDi 会话
@@ -1659,7 +1681,11 @@ class Firefox(object):
             result = bidi_context.get_tree(self._driver, max_depth=0)
             contexts = result.get("contexts", [])
             with self._context_ids_lock:
-                self._context_ids = [c["context"] for c in contexts]
+                self._context_ids = [
+                    c.get("context")
+                    for c in contexts
+                    if _is_valid_context_id(c.get("context"))
+                ]
         except Exception as e:
             logger.warning("刷新标签页列表失败: %s", e)
 
