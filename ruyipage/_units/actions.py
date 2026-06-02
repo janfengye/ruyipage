@@ -62,6 +62,7 @@ class Actions(object):
         self._wheel_actions = []  # wheel (滚轮) 动作序列
         self.curr_x = 0  # 当前鼠标 X 坐标 (视口像素)
         self.curr_y = 0  # 当前鼠标 Y 坐标 (视口像素)
+        self._pointer_position_known = False
 
     # ════════════════════════════════════════════════════════════════
     #  鼠标/指针操作
@@ -107,6 +108,7 @@ class Actions(object):
         self._pointer_actions.append(action)
         self.curr_x = x
         self.curr_y = y
+        self._pointer_position_known = True
         return self
 
     def move(self, offset_x=0, offset_y=0, duration=100):
@@ -130,6 +132,7 @@ class Actions(object):
                 "duration": duration,
             }
         )
+        self._pointer_position_known = True
         return self
 
     def click(self, on_ele=None, times=1):
@@ -300,6 +303,7 @@ class Actions(object):
 
         self.curr_x = int(ex)
         self.curr_y = int(ey)
+        self._pointer_position_known = True
         return self
 
     def drag(self, source, target, duration=500, steps=20):
@@ -566,6 +570,8 @@ class Actions(object):
                     logger.debug("预滚动元素到视口失败: %s", e)
 
         min_x, max_x, min_y, max_y = self._get_viewport_bounds()
+        if not self._pointer_position_known:
+            start_x, start_y = self._random_human_start(min_x, max_x, min_y, max_y)
         start_x, start_y = self._clamp_point(start_x, start_y, min_x, max_x, min_y, max_y)
         target_x, target_y = self._clamp_point(target_x, target_y, min_x, max_x, min_y, max_y)
 
@@ -576,6 +582,8 @@ class Actions(object):
             algorithm=algorithm,
             style=style,
         )
+        if not path or int(path[0][0]) != int(start_x) or int(path[0][1]) != int(start_y):
+            path.insert(0, (start_x, start_y))
 
         # 执行移动
         for px, py in path:
@@ -621,6 +629,7 @@ class Actions(object):
 
         self.curr_x = target_x
         self.curr_y = target_y
+        self._pointer_position_known = True
         return self
 
     def human_click(self, on_ele=None, button="left", algorithm=None, style=None):
@@ -858,6 +867,24 @@ class Actions(object):
         width = max(1, int(width or 0))
         height = max(1, int(height or 0))
         return 0, width - 1, 0, height - 1
+
+    def _random_human_start(self, min_x, max_x, min_y, max_y):
+        """首次拟人移动时，在 viewport 内生成一个自然起点。"""
+        return (
+            self._random_axis_start(min_x, max_x),
+            self._random_axis_start(min_y, max_y),
+        )
+
+    @staticmethod
+    def _random_axis_start(min_value, max_value):
+        min_value = int(round(min_value))
+        max_value = int(round(max_value))
+        if max_value <= min_value:
+            return float(min_value)
+
+        span = max_value - min_value
+        margin = min(max(8, int(span * 0.08)), span // 2)
+        return float(random.randint(min_value + margin, max_value - margin))
 
     def _clamp_point(self, x, y, min_x, max_x, min_y, max_y):
         """将坐标限制在当前 viewport 内。"""

@@ -72,3 +72,44 @@ def test_human_move_tuple_still_clamps_out_of_viewport_target():
     assert moves
     assert moves[-1]["x"] == 1329
     assert moves[-1]["y"] == 722
+
+
+@pytest.mark.feature
+def test_first_human_move_uses_random_viewport_start(monkeypatch):
+    owner = _DummyOwner()
+    actions = Actions(owner)
+    monkeypatch.setattr(actions, "_random_human_start", lambda *args: (321, 234))
+
+    actions.human_move((900, 500), style="line")
+
+    moves = [a for a in actions._pointer_actions if a.get("type") == "pointerMove"]
+    assert moves
+    assert moves[0]["x"] == 321
+    assert moves[0]["y"] == 234
+    assert moves[-1]["x"] == 900
+    assert moves[-1]["y"] == 500
+    assert actions.curr_x == 900
+    assert actions.curr_y == 500
+    assert actions._pointer_position_known is True
+
+
+@pytest.mark.feature
+def test_human_move_respects_explicit_zero_pointer_position(monkeypatch):
+    owner = _DummyOwner()
+    actions = Actions(owner)
+
+    def fail_random_start(*args):
+        raise AssertionError("explicit pointer position should not be randomized")
+
+    monkeypatch.setattr(actions, "_random_human_start", fail_random_start)
+    actions.move_to((0, 0))
+    move_count = len(actions._pointer_actions)
+
+    actions.human_move((300, 200), style="line")
+
+    moves = [a for a in actions._pointer_actions[move_count:] if a.get("type") == "pointerMove"]
+    assert moves
+    assert moves[0]["x"] == 0
+    assert moves[0]["y"] == 0
+    assert moves[-1]["x"] == 300
+    assert moves[-1]["y"] == 200
