@@ -18,6 +18,23 @@
 
   <script>
     window.__ruyi_fixture_ready = true;
+    window.__emailEvents = [];
+    window.__resetEmailEvents = function () {
+      const email = document.getElementById('email-input');
+      email.value = '';
+      window.__emailEvents = [];
+    };
+    ['pointerdown', 'mousedown', 'focus', 'pointerup', 'mouseup', 'click', 'keydown', 'keyup', 'input'].forEach((type) => {
+      document.getElementById('email-input').addEventListener(type, (event) => {
+        window.__emailEvents.push({
+          type,
+          key: event.key || null,
+          value: event.target.value,
+          time: performance.now(),
+          trusted: event.isTrusted
+        });
+      });
+    });
   </script>
 </body>
 </html>

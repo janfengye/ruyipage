@@ -60,9 +60,31 @@ class Actions(object):
         self._pointer_actions = []  # pointer (mouse) 动作序列
         self._key_actions = []  # keyboard 动作序列
         self._wheel_actions = []  # wheel (滚轮) 动作序列
+        self._action_stages = []
         self.curr_x = 0  # 当前鼠标 X 坐标 (视口像素)
         self.curr_y = 0  # 当前鼠标 Y 坐标 (视口像素)
         self._pointer_position_known = False
+
+    def _append_action(self, source, action):
+        """Append an action while preserving chain-call ordering by source stage."""
+        if source == "pointer":
+            self._pointer_actions.append(action)
+        elif source == "key":
+            self._key_actions.append(action)
+        elif source == "wheel":
+            self._wheel_actions.append(action)
+        else:
+            raise ValueError("unsupported action source: {}".format(source))
+
+        if self._action_stages and self._action_stages[-1].get("source") == source:
+            self._action_stages[-1]["actions"].append(action)
+        else:
+            self._action_stages.append({"source": source, "actions": [action]})
+
+    def _append_wait_stage(self, duration):
+        self._pointer_actions.append({"type": "pause", "duration": duration})
+        self._key_actions.append({"type": "pause", "duration": duration})
+        self._action_stages.append({"source": "wait", "duration": duration})
 
     # ════════════════════════════════════════════════════════════════
     #  鼠标/指针操作
@@ -105,7 +127,7 @@ class Actions(object):
         action = {"type": "pointerMove", "x": int(x), "y": int(y), "duration": duration}
         if origin != "viewport":
             action["origin"] = origin
-        self._pointer_actions.append(action)
+        self._append_action("pointer", action)
         self.curr_x = x
         self.curr_y = y
         self._pointer_position_known = True
@@ -124,7 +146,8 @@ class Actions(object):
         """
         self.curr_x += offset_x
         self.curr_y += offset_y
-        self._pointer_actions.append(
+        self._append_action(
+            "pointer",
             {
                 "type": "pointerMove",
                 "x": int(self.curr_x),
@@ -150,9 +173,9 @@ class Actions(object):
             self.move_to(on_ele)
 
         for _ in range(times):
-            self._pointer_actions.append({"type": "pointerDown", "button": 0})
-            self._pointer_actions.append({"type": "pause", "duration": 50})
-            self._pointer_actions.append({"type": "pointerUp", "button": 0})
+            self._append_action("pointer", {"type": "pointerDown", "button": 0})
+            self._append_action("pointer", {"type": "pause", "duration": 50})
+            self._append_action("pointer", {"type": "pointerUp", "button": 0})
 
         return self
 
@@ -179,9 +202,9 @@ class Actions(object):
         if on_ele:
             self.move_to(on_ele)
 
-        self._pointer_actions.append({"type": "pointerDown", "button": 2})
-        self._pointer_actions.append({"type": "pause", "duration": 50})
-        self._pointer_actions.append({"type": "pointerUp", "button": 2})
+        self._append_action("pointer", {"type": "pointerDown", "button": 2})
+        self._append_action("pointer", {"type": "pause", "duration": 50})
+        self._append_action("pointer", {"type": "pointerUp", "button": 2})
         return self
 
     def middle_click(self, on_ele=None):
@@ -196,9 +219,9 @@ class Actions(object):
         if on_ele:
             self.move_to(on_ele)
 
-        self._pointer_actions.append({"type": "pointerDown", "button": 1})
-        self._pointer_actions.append({"type": "pause", "duration": 50})
-        self._pointer_actions.append({"type": "pointerUp", "button": 1})
+        self._append_action("pointer", {"type": "pointerDown", "button": 1})
+        self._append_action("pointer", {"type": "pause", "duration": 50})
+        self._append_action("pointer", {"type": "pointerUp", "button": 1})
         return self
 
     # 保留旧名称为别名，但标记为已弃用，内部统一调用新方法
@@ -236,7 +259,7 @@ class Actions(object):
         """
         if on_ele:
             self.move_to(on_ele)
-        self._pointer_actions.append({"type": "pointerDown", "button": button})
+        self._append_action("pointer", {"type": "pointerDown", "button": button})
         return self
 
     def release(self, on_ele=None, button=0):
@@ -251,7 +274,7 @@ class Actions(object):
         """
         if on_ele:
             self.move_to(on_ele)
-        self._pointer_actions.append({"type": "pointerUp", "button": button})
+        self._append_action("pointer", {"type": "pointerUp", "button": button})
         return self
 
     def drag_to(self, source, target, duration=500, steps=20):
@@ -273,7 +296,8 @@ class Actions(object):
         ex, ey = self._resolve_position(target)
         step_dur = max(1, duration // steps)
 
-        self._pointer_actions.append(
+        self._append_action(
+            "pointer",
             {
                 "type": "pointerMove",
                 "origin": "viewport",
@@ -282,13 +306,14 @@ class Actions(object):
                 "duration": 0,
             }
         )
-        self._pointer_actions.append({"type": "pointerDown", "button": 0})
-        self._pointer_actions.append({"type": "pause", "duration": 120})
+        self._append_action("pointer", {"type": "pointerDown", "button": 0})
+        self._append_action("pointer", {"type": "pause", "duration": 120})
 
         for i in range(1, steps + 1):
             px = int(sx + (ex - sx) * i / steps)
             py = int(sy + (ey - sy) * i / steps)
-            self._pointer_actions.append(
+            self._append_action(
+                "pointer",
                 {
                     "type": "pointerMove",
                     "origin": "viewport",
@@ -298,8 +323,8 @@ class Actions(object):
                 }
             )
 
-        self._pointer_actions.append({"type": "pause", "duration": 120})
-        self._pointer_actions.append({"type": "pointerUp", "button": 0})
+        self._append_action("pointer", {"type": "pause", "duration": 120})
+        self._append_action("pointer", {"type": "pointerUp", "button": 0})
 
         self.curr_x = int(ex)
         self.curr_y = int(ey)
@@ -324,7 +349,7 @@ class Actions(object):
         Returns:
             self: 支持链式调用。
         """
-        self._key_actions.append({"type": "keyDown", "value": key})
+        self._append_action("key", {"type": "keyDown", "value": key})
         return self
 
     def key_up(self, key):
@@ -336,7 +361,7 @@ class Actions(object):
         Returns:
             self: 支持链式调用。
         """
-        self._key_actions.append({"type": "keyUp", "value": key})
+        self._append_action("key", {"type": "keyUp", "value": key})
         return self
 
     def combo(self, *keys):
@@ -355,9 +380,9 @@ class Actions(object):
             self: 支持链式调用。
         """
         for k in keys:
-            self._key_actions.append({"type": "keyDown", "value": k})
+            self._append_action("key", {"type": "keyDown", "value": k})
         for k in reversed(keys):
-            self._key_actions.append({"type": "keyUp", "value": k})
+            self._append_action("key", {"type": "keyUp", "value": k})
         return self
 
     def type(self, text, interval=0):
@@ -373,10 +398,10 @@ class Actions(object):
             self: 支持链式调用。
         """
         for char in str(text):
-            self._key_actions.append({"type": "keyDown", "value": char})
+            self._append_action("key", {"type": "keyDown", "value": char})
             if interval:
-                self._key_actions.append({"type": "pause", "duration": interval})
-            self._key_actions.append({"type": "keyUp", "value": char})
+                self._append_action("key", {"type": "pause", "duration": interval})
+            self._append_action("key", {"type": "keyUp", "value": char})
         return self
 
     def press(self, key):
@@ -391,8 +416,8 @@ class Actions(object):
         Returns:
             self: 支持链式调用。
         """
-        self._key_actions.append({"type": "keyDown", "value": key})
-        self._key_actions.append({"type": "keyUp", "value": key})
+        self._append_action("key", {"type": "keyDown", "value": key})
+        self._append_action("key", {"type": "keyUp", "value": key})
         return self
 
     # ════════════════════════════════════════════════════════════════
@@ -428,7 +453,7 @@ class Actions(object):
         }
         if origin != "viewport":
             action["origin"] = origin
-        self._wheel_actions.append(action)
+        self._append_action("wheel", action)
         return self
 
     # ════════════════════════════════════════════════════════════════
@@ -447,8 +472,7 @@ class Actions(object):
             self: 支持链式调用。
         """
         ms = int(seconds * 1000)
-        self._pointer_actions.append({"type": "pause", "duration": ms})
-        self._key_actions.append({"type": "pause", "duration": ms})
+        self._append_wait_stage(ms)
         return self
 
     # ════════════════════════════════════════════════════════════════
@@ -458,41 +482,27 @@ class Actions(object):
     def perform(self):
         """执行积累的所有动作。
 
-        将 pointer、key、wheel 三个通道的动作序列
-        通过 BiDi input.performActions 命令一次性发送给浏览器。
+        按链式调用顺序将 pointer、key、wheel 动作分阶段发送给浏览器。
+        不同 input source 在同一次 performActions 中会并行执行，因此跨 source
+        的阶段会拆成多次 input.performActions 调用。
         执行后自动清空动作队列。
 
         Returns:
             self: 支持链式调用。
         """
-        actions = []
-
         # 保存副本供可视化使用
         pointer_copy = self._pointer_actions[:]
         key_copy = self._key_actions[:]
-
-        if self._pointer_actions:
-            actions.append(
-                {
-                    "type": "pointer",
-                    "id": "mouse0",
-                    "parameters": {"pointerType": "mouse"},
-                    "actions": self._pointer_actions[:],
-                }
-            )
-
-        if self._key_actions:
-            actions.append(
-                {"type": "key", "id": "keyboard0", "actions": self._key_actions[:]}
-            )
-
-        if self._wheel_actions:
-            actions.append(
-                {"type": "wheel", "id": "wheel0", "actions": self._wheel_actions[:]}
-            )
+        stages = [
+            {"source": stage.get("source"), "actions": stage.get("actions", [])[:], "duration": stage.get("duration")}
+            for stage in self._action_stages
+        ]
 
         try:
-            if actions:
+            for stage in stages:
+                actions = self._build_perform_actions(stage)
+                if not actions:
+                    continue
                 self._owner._driver._browser_driver.run(
                     "input.performActions",
                     {"context": self._owner._context_id, "actions": actions},
@@ -502,11 +512,44 @@ class Actions(object):
             self._pointer_actions.clear()
             self._key_actions.clear()
             self._wheel_actions.clear()
+            self._action_stages.clear()
 
         # 可视化渲染（执行后注入）
         self._send_visual_data(pointer_copy, key_copy)
 
         return self
+
+    def _build_perform_actions(self, stage):
+        source = stage.get("source")
+        if source == "pointer":
+            return [
+                {
+                    "type": "pointer",
+                    "id": "mouse0",
+                    "parameters": {"pointerType": "mouse"},
+                    "actions": stage.get("actions", []),
+                }
+            ]
+        if source == "key":
+            return [{"type": "key", "id": "keyboard0", "actions": stage.get("actions", [])}]
+        if source == "wheel":
+            return [{"type": "wheel", "id": "wheel0", "actions": stage.get("actions", [])}]
+        if source == "wait":
+            duration = stage.get("duration", 0)
+            return [
+                {
+                    "type": "pointer",
+                    "id": "mouse0",
+                    "parameters": {"pointerType": "mouse"},
+                    "actions": [{"type": "pause", "duration": duration}],
+                },
+                {
+                    "type": "key",
+                    "id": "keyboard0",
+                    "actions": [{"type": "pause", "duration": duration}],
+                },
+            ]
+        return []
 
     def release_all(self):
         """释放所有按住的按键和鼠标按钮。
@@ -588,7 +631,8 @@ class Actions(object):
         # 执行移动
         for px, py in path:
             px, py = self._clamp_point(px, py, min_x, max_x, min_y, max_y)
-            self._pointer_actions.append(
+            self._append_action(
+                "pointer",
                 {
                     "type": "pointerMove",
                     "x": int(px),
@@ -607,7 +651,8 @@ class Actions(object):
                 min_y,
                 max_y,
             )
-            self._pointer_actions.append(
+            self._append_action(
+                "pointer",
                 {
                     "type": "pointerMove",
                     "x": int(hover_x),
@@ -618,7 +663,8 @@ class Actions(object):
 
         # 精确落点
         target_x, target_y = self._clamp_point(target_x, target_y, min_x, max_x, min_y, max_y)
-        self._pointer_actions.append(
+        self._append_action(
+            "pointer",
             {
                 "type": "pointerMove",
                 "x": int(target_x),
@@ -659,11 +705,12 @@ class Actions(object):
         button_map = {"left": 0, "middle": 1, "right": 2}
         btn = button_map.get(button, 0)
 
-        self._pointer_actions.append({"type": "pointerDown", "button": btn})
-        self._pointer_actions.append(
+        self._append_action("pointer", {"type": "pointerDown", "button": btn})
+        self._append_action(
+            "pointer",
             {"type": "pause", "duration": random.randint(40, 90)}
         )
-        self._pointer_actions.append({"type": "pointerUp", "button": btn})
+        self._append_action("pointer", {"type": "pointerUp", "button": btn})
 
         return self
 
@@ -906,14 +953,14 @@ class Actions(object):
             self: 支持链式调用。
         """
         for char in str(text):
-            self._key_actions.append({"type": "keyDown", "value": char})
+            self._append_action("key", {"type": "keyDown", "value": char})
 
             # 随机击键间隔
             interval = int(random.uniform(min_delay, max_delay) * 1000)
             if interval > 0:
-                self._key_actions.append({"type": "pause", "duration": interval})
+                self._append_action("key", {"type": "pause", "duration": interval})
 
-            self._key_actions.append({"type": "keyUp", "value": char})
+            self._append_action("key", {"type": "keyUp", "value": char})
 
         return self
 
