@@ -18,6 +18,7 @@
 > - Supports **direct automated takeover** of fingerprint browsers such as **ADS**
 > - Built-in **HTTP / SOCKS5 password proxy** support, including **one password proxy per tab**
 > - Built on **Firefox + WebDriver BiDi**
+> - Can directly obtain **closed shadow root** nodes
 > - Better suited for **high-risk scenarios**
 
 [![PyPI version](https://img.shields.io/pypi/v/ruyiPage.svg)](https://pypi.org/project/ruyiPage/)
@@ -354,7 +355,7 @@ When enabled, a translucent frosted-glass panel appears in the bottom-right corn
 - clicking an element locks the current result
 - the panel shows element name, text, absolute XPath, relative XPath, and center `(x, y)`
 - a built-in `ruyiPage code generation` tab generates ready-to-use locator code
-- iframe, nested iframe, and open shadow root chains are assembled automatically
+- iframe, nested iframe, and open / closed shadow root chains are assembled automatically
 - `XPath (absolute)`, `XPath (relative)`, and `ruyiPage code generation` all support one-click copy
 - while locked, it will not switch to other elements
 - click `Continue Picking` to resume picking
@@ -371,7 +372,7 @@ This showcase page covers:
 
 - regular page elements
 - same-origin iframes and nested iframes
-- open shadow roots
+- open / closed shadow roots
 - complex text nodes and SVG nodes
 
 ### Mouse Visual Debugging
@@ -1612,6 +1613,7 @@ Suggested order:
 - `42_xpath_picker_complex_showcase.py` starts XPath picker and opens a showcase page with complex nodes, shadow roots, and nested iframes
 - `46_human_behavior_showcase.py` demonstrates both bezier and windmouse human cursor algorithms with action visualization enabled
 - `52_per_tab_socks5_proxy_browserscan.py` single browser, multiple container tabs, each tab using a different SOCKS5 password proxy
+- `53_duckai_eventstream_capture.py` opens Duck.ai with Firefox, submits a chat prompt, and captures the `POST /duckchat/v1/chat` EventStream response body
 
 ---
 

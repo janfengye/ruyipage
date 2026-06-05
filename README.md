@@ -18,6 +18,7 @@
 > - 支持 **ADS** 等指纹浏览器**直接自动化接管**
 > - 自带 **HTTP / SOCKS5 密码代理**支持，支持**一个 tab 一个密码代理**
 > - 基于 **Firefox + WebDriver BiDi**
+> - 可以直接获取 **closed shadow root** 节点
 > - 更适合**高风控场景**
 
 [![PyPI version](https://img.shields.io/pypi/v/ruyiPage.svg)](https://pypi.org/project/ruyiPage/)
@@ -354,7 +355,7 @@ page.get("https://www.example.com")
 - 点击页面元素时，会锁定当前结果
 - 浮窗会显示元素名字、文本、XPath 绝对路径、XPath 相对路径、元素中心 `(x, y)`
 - 内置 `ruyiPage代码生成` 选项卡，会自动生成对应元素获取代码
-- iframe、嵌套 iframe、open shadow root 场景会自动拼好访问链
+- iframe、嵌套 iframe、open / closed shadow root 场景会自动拼好访问链
 - `XPath (absolute)`、`XPath (relative)`、`ruyiPage代码生成` 都支持一键复制
 - 锁定后不会继续切换到其他元素
 - 点击浮窗里的 `继续选择` 后，才会重新允许选择其他元素
@@ -371,7 +372,7 @@ python examples/42_xpath_picker_complex_showcase.py
 
 - 普通页面元素
 - 同源 iframe / 嵌套 iframe
-- open shadow root
+- open / closed shadow root
 - 复杂文本节点与 SVG 节点
 
 ### 鼠标行为可视化调试
@@ -1650,6 +1651,7 @@ page.extensions.uninstall(ext_id)
 - `46_human_behavior_showcase.py` 演示 bezier / windmouse 两套拟人轨迹算法，并开启鼠标行为可视化
 - `48_smart_fingerprint.py` 演示 `apply_smart_fingerprint()` 一站式智能指纹（geo 探测 + 内核 fpfile + BiDi 仿真）
 - `52_per_tab_socks5_proxy_browserscan.py` 单浏览器创建多个 container tabs，并让每个 tab 走不同 SOCKS5 密码代理
+- `53_duckai_eventstream_capture.py` 使用 Firefox 打开 Duck.ai，提交聊天内容，并拦截 `POST /duckchat/v1/chat` 的 EventStream 响应体
 
 ---
 

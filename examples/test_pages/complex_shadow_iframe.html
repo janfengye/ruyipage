@@ -25,19 +25,6 @@
     </div>
 
     <script>
-        (function () {
-            const wm = new WeakMap();
-            const orig = Element.prototype.attachShadow;
-            Element.prototype.attachShadow = function (init) {
-                const root = orig.call(this, init);
-                if (init && init.mode === "closed") wm.set(this, root);
-                return root;
-            };
-            window.__ruyiGetClosedShadowRoot = function (el) {
-                return wm.get(el) || null;
-            };
-        })();
-
         const hostOpen = document.getElementById("host-open-shadow");
         const hostOpenRoot = hostOpen.attachShadow({ mode: "open" });
         hostOpenRoot.innerHTML = '<p id="host-open-text">host-open-text</p><button id="host-open-btn">host-open-btn</button>';

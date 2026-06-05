@@ -2977,7 +2977,7 @@ class FirefoxBase(BasePage):
 
         if (data.shadowPath && data.shadowPath.length) {
             lines.push('');
-            lines.push('# 如果页面暴露了 closed shadow 调试桥，也可以改成 with_shadow() 形式：');
+            lines.push('# open / closed shadow 都可以改成 with_shadow() 形式：');
             lines.push('# with shadow_host1.with_shadow("open") as root:');
             lines.push('#     target = root.ele("xpath:...")');
         }
@@ -2985,7 +2985,7 @@ class FirefoxBase(BasePage):
         if (String(data.context || '').includes('shadow(') && (!data.shadowPath || !data.shadowPath.length)) {
             lines.push('');
             lines.push('# 注意：当前命中元素位于 shadow 场景，但未能还原 host 链。');
-            lines.push('# closed shadow 需要页面提供 __ruyiGetClosedShadowRoot 调试桥后，才能稳定生成访问代码。');
+            lines.push('# closed shadow 需要当前 Firefox 支持 BiDi privileged closed shadow 序列化，才能稳定生成访问代码。');
         }
 
         return lines.join('\n');

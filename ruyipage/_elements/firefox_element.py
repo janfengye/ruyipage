@@ -269,22 +269,34 @@ class FirefoxElement(BaseElement):
 
     @property
     def closed_shadow_root(self) -> "FirefoxElement | None":
-        """尝试获取 closed shadowRoot（仅当页面暴露调试桥接函数时可用）。
+        """获取 closed shadowRoot。
 
         说明：
             - 标准 DOM API 无法直接读取 closed shadowRoot。
-            - 若页面定义了 `window.__ruyiGetClosedShadowRoot(el)`，
-              则可通过该桥接函数在自动化测试中访问。
-            - 未暴露桥接函数或读取失败时返回 None。
+            - 这里使用 Firefox BiDi 的 privileged 序列化结果，不注入脚本、
+              不设置页面全局变量，也不探测页面桥接函数。
+            - 当前 Firefox 不支持该 remote 序列化能力，或元素没有 closed
+              shadowRoot 时返回 None。
         """
+        # Firefox serializes Element.openOrClosedShadowRoot in the remote
+        # privileged layer; this does not install or probe any page bridge.
         result = self._call_js_on_self_raw(
-            """(el) => {
-                if (typeof window.__ruyiGetClosedShadowRoot !== 'function') return null;
-                return window.__ruyiGetClosedShadowRoot(el);
-            }"""
+            "(el) => el",
+            serialization_options={"maxDomDepth": 1},
         )
-        if result and result.get("type") == "node":
-            return FirefoxElement._from_node(self._owner, result)
+        if not result or result.get("type") != "node":
+            return None
+
+        shadow_root = (result.get("value") or {}).get("shadowRoot")
+        if not isinstance(shadow_root, dict):
+            return None
+
+        shadow_value = shadow_root.get("value") or {}
+        if str(shadow_value.get("mode", "")).lower() != "closed":
+            return None
+
+        if shadow_root.get("type") == "node":
+            return FirefoxElement._from_node(self._owner, shadow_root)
         return None
 
     @contextmanager
@@ -1279,7 +1291,7 @@ class FirefoxElement(BaseElement):
         # 但也可能是合法的 None 返回值。如果有丢失标记则重试。
         return result
 
-    def _call_js_on_self_raw(self, func_declaration, *args):
+    def _call_js_on_self_raw(self, func_declaration, *args, serialization_options=None):
         """在元素上执行 JS 函数，返回原始 BiDi 结果
 
         当遇到 'no such node' 错误时，尝试 _refresh_id() 一次后重试。
@@ -1292,6 +1304,9 @@ class FirefoxElement(BaseElement):
             BiDi RemoteValue 字典
         """
         from .._functions.bidi_values import serialize_value
+
+        if serialization_options is None:
+            serialization_options = {"maxDomDepth": 0, "includeShadowTree": "open"}
 
         # 构建参数：第一个是 self 的 SharedReference，后面是额外参数
         arguments = [make_shared_ref(self._shared_id, self._handle)]
@@ -1309,7 +1324,7 @@ class FirefoxElement(BaseElement):
                 self._owner._context_id,
                 func_declaration,
                 arguments=arguments,
-                serialization_options={"maxDomDepth": 0, "includeShadowTree": "open"},
+                serialization_options=serialization_options,
             )
 
             if result.get("type") == "exception":
@@ -1325,10 +1340,7 @@ class FirefoxElement(BaseElement):
                             self._owner._context_id,
                             func_declaration,
                             arguments=arguments,
-                            serialization_options={
-                                "maxDomDepth": 0,
-                                "includeShadowTree": "open",
-                            },
+                            serialization_options=serialization_options,
                         )
                         if retry_result.get("type") == "exception":
                             raise ElementLostError(

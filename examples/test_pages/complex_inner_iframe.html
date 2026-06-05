@@ -15,19 +15,6 @@
     <div id="inner-closed-host" class="box"></div>
 
     <script>
-        (function () {
-            const wm = new WeakMap();
-            const orig = Element.prototype.attachShadow;
-            Element.prototype.attachShadow = function (init) {
-                const root = orig.call(this, init);
-                if (init && init.mode === "closed") wm.set(this, root);
-                return root;
-            };
-            window.__ruyiGetClosedShadowRoot = function (el) {
-                return wm.get(el) || null;
-            };
-        })();
-
         const openHost = document.getElementById("inner-open-host");
         const openRoot = openHost.attachShadow({ mode: "open" });
         openRoot.innerHTML = '<p id="inner-open-text">inner-open-text</p><button id="inner-open-btn">inner-open-btn</button>';

@@ -3,9 +3,9 @@
 
 覆盖点：
 1) 主页面 open shadow
-2) 主页面 closed shadow（桥接函数）
+2) 主页面 closed shadow（Firefox BiDi privileged 通道）
 3) 进入 iframe 后 open shadow
-4) 进入 iframe 后 closed shadow（桥接函数）
+4) 进入 iframe 后 closed shadow（Firefox BiDi privileged 通道）
 5) with_frame / with_shadow 简洁 API
 """
 
