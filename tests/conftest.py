@@ -29,6 +29,7 @@ BROWSER_TEST_FILES = {
     "tests/features/test_action_visual_resize.py",
     "tests/features/test_actions.py",
     "tests/features/test_attach_mode.py",
+    "tests/features/test_capture_packets.py",
     "tests/features/test_cookies.py",
     "tests/features/test_data_collector.py",
     "tests/features/test_human_move_bounds.py",
@@ -136,6 +137,10 @@ def page(opts_factory):
         pass
     try:
         page.listen.stop()
+    except Exception:
+        pass
+    try:
+        page.capture.stop()
     except Exception:
         pass
     try:

@@ -43,6 +43,7 @@ from ._units.extensions import ExtensionManager
 from ._units.events import BidiEvent
 from ._units.interceptor import InterceptedRequest
 from ._units.listener import DataPacket
+from ._units.capture import CaptureManager, CapturePacket
 from ._units.network_tools import DataCollector, NetworkData
 from ._units.cookies import CookieInfo
 from ._units.script_tools import (
@@ -545,6 +546,8 @@ __all__ = [
     "BidiEvent",
     "InterceptedRequest",
     "DataPacket",
+    "CaptureManager",
+    "CapturePacket",
     "DataCollector",
     "NetworkData",
     "CookieInfo",

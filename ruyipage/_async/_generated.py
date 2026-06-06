@@ -3,7 +3,7 @@
 # │ WARNING: 此文件由 scripts/generate_async_api.py 自动生成          │
 # │ 请勿手动编辑！修改后请重新运行生成器：                               │
 # │   python scripts/generate_async_api.py                          │
-# │ 生成时间: 2026-06-06 20:43:09                                        │
+# │ 生成时间: 2026-06-07 01:25:07                                        │
 # └──────────────────────────────────────────────────────────────────┘
 
 from .greenlet_bridge import greenlet_spawn
@@ -146,6 +146,12 @@ class AsyncFirefoxBase(AsyncFirefoxBaseMixin):
         if "browser_tools" not in self._unit_cache:
             self._unit_cache["browser_tools"] = AsyncUnitProxy(self._sync.browser_tools, owner=self)
         return self._unit_cache["browser_tools"]
+
+    @property
+    def capture(self):
+        if "capture" not in self._unit_cache:
+            self._unit_cache["capture"] = AsyncUnitProxy(self._sync.capture, owner=self)
+        return self._unit_cache["capture"]
 
     @property
     def config(self):

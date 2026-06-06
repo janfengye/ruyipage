@@ -38,6 +38,7 @@ if TYPE_CHECKING:
     from .._units.scroller import PageScroller
     from .._units.listener import Listener
     from .._units.interceptor import Interceptor
+    from .._units.capture import CaptureManager
     from .._units.window import WindowManager
     from .._units.prefs import PrefsManager
     from .._units.realm_tracker import RealmTracker
@@ -81,6 +82,7 @@ class FirefoxBase(BasePage):
         self._session_storage = None
         self._console = None
         self._interceptor = None
+        self._capture = None
         self._network_manager = None
         self._window = None
         self._browser_manager = None
@@ -3497,6 +3499,15 @@ class FirefoxBase(BasePage):
 
             self._interceptor = Interceptor(self)
         return self._interceptor
+
+    @property
+    def capture(self) -> "CaptureManager":
+        """Passive request/response packet capture manager."""
+        if self._capture is None:
+            from .._units.capture import CaptureManager
+
+            self._capture = CaptureManager(self)
+        return self._capture
 
     @property
     def trace(self) -> "Tracer":

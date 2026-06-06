@@ -593,7 +593,7 @@ print(page.url)
 | 弹窗处理 | `page.wait_prompt()` / `page.accept_prompt()` / `page.set_prompt_handler()` | alert / confirm / prompt |
 | 导航事件 | `page.navigation` | navigationStarted、load、historyUpdated 等 |
 | 通用事件 | `page.events` | browsingContext / network / script / input / log 事件 |
-| 网络控制 | `page.network` / `page.intercept` | 请求头、缓存控制、拦截、mock、fail、collector |
+| 网络控制 | `page.capture` / `page.network` / `page.intercept` | 被动抓包、请求头、缓存控制、拦截、mock、fail、collector |
 | 浏览上下文 | `page.contexts` | getTree、create tab/window、reload、viewport |
 | 浏览器级能力 | `page.browser_tools` | user context、client window |
 | 脚本能力 | `page.get_realms()` / `page.eval_handle()` / `page.disown_handles()` | realms、远程对象句柄、preload script |
@@ -1368,6 +1368,38 @@ print(body)
 page.intercept.stop()     # 自动清理内部 collector
 ```
 
+### 被动抓包
+
+`page.capture` 用于按 URL 和 method 被动抓取完整请求/响应信息，不会拦截或暂停请求。适合页面打开后自动加载的接口，也支持一次抓多个包：
+
+```python
+page.capture.start("/api/", method="POST")
+
+# 外部正常触发请求：打开页面、点击按钮、执行 JS 都可以
+page.get("https://example.com")
+
+# count=1 返回单个 CapturePacket 或 None
+packet = page.capture.wait(timeout=10)
+
+# count>1 返回 list，超时会返回已经抓到的部分
+packets = page.capture.wait(timeout=10, count=5)
+
+for p in packets:
+    print(p.url, p.method)
+    print(p.request_headers)
+    print(p.request_body)
+    print(p.response_status)
+    print(p.response_headers)
+    print(p.response_body)
+
+# 已抓到的历史包
+all_packets = page.capture.steps
+
+page.capture.stop()
+```
+
+抓自动加载包时要先 `page.capture.start()`，再打开页面；已经发出的历史请求不能补抓。
+
 ### 设置额外请求头
 
 ```python
@@ -1666,6 +1698,7 @@ page.extensions.uninstall(ext_id)
 - `48_smart_fingerprint.py` 演示 `apply_smart_fingerprint()` 一站式智能指纹（geo 探测 + 内核 fpfile + BiDi 仿真）
 - `52_per_tab_socks5_proxy_browserscan.py` 单浏览器创建多个 container tabs，并让每个 tab 走不同 SOCKS5 密码代理
 - `53_duckai_eventstream_capture.py` 使用 Firefox 打开 Duck.ai，提交聊天内容，并拦截 `POST /duckchat/v1/chat` 的 EventStream 响应体
+- `54_bing_passive_capture.py` 使用 `page.capture` 先启动被动抓包，再打开 Bing 搜索页，抓自动加载请求的请求头/请求体/响应头/响应体
 
 ---
 

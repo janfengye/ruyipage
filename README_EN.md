@@ -596,7 +596,7 @@ Before diving into the details, this table gives a quick overview of what `ruyiP
 | Prompt handling | `page.wait_prompt()` / `page.accept_prompt()` / `page.set_prompt_handler()` | `alert` / `confirm` / `prompt` |
 | Navigation events | `page.navigation` | `navigationStarted`, `load`, `historyUpdated`, etc. |
 | Generic events | `page.events` | `browsingContext` / `network` / `script` / `input` / `log` events |
-| Network control | `page.network` / `page.intercept` | Headers, cache control, interception, mocking, fail, collector |
+| Network control | `page.capture` / `page.network` / `page.intercept` | Passive capture, headers, cache control, interception, mocking, fail, collector |
 | Browsing contexts | `page.contexts` | `getTree`, create tab/window, reload, viewport |
 | Browser-level tools | `page.browser_tools` | user contexts, client windows |
 | Script capabilities | `page.get_realms()` / `page.eval_handle()` / `page.disown_handles()` | realms, remote handles, preload scripts |
@@ -1332,6 +1332,38 @@ print(body)
 page.intercept.stop()     # auto-cleans internal collector
 ```
 
+### Passive Packet Capture
+
+`page.capture` passively captures full request/response information by URL and method without intercepting or pausing requests. It is suitable for auto-loaded page APIs and supports multiple packets:
+
+```python
+page.capture.start("/api/", method="POST")
+
+# Trigger requests normally: open a page, click a button, or run JS
+page.get("https://example.com")
+
+# count=1 returns one CapturePacket or None
+packet = page.capture.wait(timeout=10)
+
+# count>1 returns a list; on timeout it returns what has been captured
+packets = page.capture.wait(timeout=10, count=5)
+
+for p in packets:
+    print(p.url, p.method)
+    print(p.request_headers)
+    print(p.request_body)
+    print(p.response_status)
+    print(p.response_headers)
+    print(p.response_body)
+
+# Captured history for this start() session
+all_packets = page.capture.steps
+
+page.capture.stop()
+```
+
+For auto-loaded requests, call `page.capture.start()` before opening the page. Already-sent historical requests cannot be captured retroactively.
+
 ### Set extra headers
 
 ```python
@@ -1628,6 +1660,7 @@ Suggested order:
 - `46_human_behavior_showcase.py` demonstrates both bezier and windmouse human cursor algorithms with action visualization enabled
 - `52_per_tab_socks5_proxy_browserscan.py` single browser, multiple container tabs, each tab using a different SOCKS5 password proxy
 - `53_duckai_eventstream_capture.py` opens Duck.ai with Firefox, submits a chat prompt, and captures the `POST /duckchat/v1/chat` EventStream response body
+- `54_bing_passive_capture.py` uses `page.capture` to start passive capture before opening Bing search, then prints auto-loaded request/response headers and bodies
 
 ---
 

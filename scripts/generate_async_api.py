@@ -48,7 +48,7 @@ RETURN_WRAPPER_MAP = {
 UNIT_PROPERTIES = {
     "scroll", "actions", "touch", "wait", "listen", "rect", "states",
     "set", "local_storage", "session_storage", "console", "intercept",
-    "network", "window", "browser_tools", "contexts", "emulation",
+    "capture", "network", "window", "browser_tools", "contexts", "emulation",
     "extensions", "downloads", "events", "navigation", "prefs",
     "realms", "config", "trace",
 }
