@@ -3904,6 +3904,107 @@ class FirefoxBase(BasePage):
         """
         return self._find_elements(locator, timeout=timeout)
 
+    def _shadow_roots_current_context(self, mode) -> "list[FirefoxElement]":
+        """Return shadow roots from this browsing context only."""
+        from .._elements.firefox_element import FirefoxElement
+
+        try:
+            result = bidi_script.evaluate(
+                self._driver._browser_driver,
+                self._context_id,
+                "document.documentElement",
+                serialization_options={
+                    "maxDomDepth": None,
+                    "includeShadowTree": "all",
+                },
+            )
+        except BiDiError as e:
+            logger.debug("shadow_roots serialization failed: %s", e)
+            return []
+        except Exception as e:
+            logger.debug("shadow_roots failed: %s", e)
+            return []
+
+        if result.get("type") == "exception":
+            logger.debug("shadow_roots script exception: %s", result)
+            return []
+
+        roots = []
+        seen = set()
+
+        def visit(remote_value):
+            if not isinstance(remote_value, dict):
+                return
+
+            value = remote_value.get("value") or {}
+            if not isinstance(value, dict):
+                return
+
+            shadow_root = value.get("shadowRoot")
+            if isinstance(shadow_root, dict):
+                shadow_value = shadow_root.get("value") or {}
+                shadow_mode = str(shadow_value.get("mode", "")).lower()
+                shared_id = shadow_root.get("sharedId")
+                if (
+                    shadow_root.get("type") == "node"
+                    and shared_id
+                    and shared_id not in seen
+                    and (mode == "all" or shadow_mode == mode)
+                ):
+                    root = FirefoxElement._from_node(self, shadow_root)
+                    if root is not None:
+                        roots.append(root)
+                        seen.add(shared_id)
+
+                visit(shadow_root)
+
+            for child in value.get("children") or []:
+                visit(child)
+
+        visit(result.get("result", {}))
+        return roots
+
+    def shadow_roots(self, mode="all", include_frames=True) -> "list[FirefoxElement]":
+        """Return open and/or closed shadow roots from this context and frames.
+
+        Args:
+            mode: ``"all"``, ``"open"``, or ``"closed"``.
+            include_frames: When true, also recursively scans descendant frames.
+
+        Returns:
+            list[FirefoxElement]: ShadowRoot node references that can be used as
+            normal search roots, for example ``root.ele("#inside")``.
+        """
+        mode = (mode or "all").lower()
+        if mode not in ("all", "open", "closed"):
+            raise ValueError("mode must be 'all', 'open', or 'closed'")
+
+        roots = []
+        seen = set()
+
+        def append_context_roots(context):
+            for root in context._shadow_roots_current_context(mode):
+                key = (getattr(root._owner, "_context_id", None), root._shared_id)
+                if key in seen:
+                    continue
+                seen.add(key)
+                roots.append(root)
+
+        def visit_context(context):
+            append_context_roots(context)
+            if not include_frames:
+                return
+            try:
+                frames = context.get_frames()
+            except Exception as e:
+                logger.debug("shadow_roots frame traversal failed: %s", e)
+                return
+            for frame in frames:
+                visit_context(frame)
+
+        visit_context(self)
+        return roots
+
     def s_ele(self, locator=None) -> "StaticElement | NoneElement":
         """获取静态元素（从当前 HTML 解析，不需要浏览器连接）
 

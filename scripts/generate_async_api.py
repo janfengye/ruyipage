@@ -90,6 +90,7 @@ ELEMENT_RETURNING = {
 
 LIST_ELEMENT_RETURNING = {
     "eles": "element",
+    "shadow_roots": "element",
     "s_eles": "static",
     "children": "element",
 }

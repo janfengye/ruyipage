@@ -375,6 +375,20 @@ This showcase page covers:
 - open / closed shadow roots
 - complex text nodes and SVG nodes
 
+You can also collect every open / closed shadow root from the current page and all child frames in one call:
+
+```python
+roots = page.shadow_roots(mode="all")  # all / open / closed
+for root in roots:
+    item = root.ele("#inside")
+```
+
+To scan only the current browsing context without recursing into iframes:
+
+```python
+roots = page.shadow_roots(mode="all", include_frames=False)
+```
+
 ### Mouse Visual Debugging
 
 `ruyiPage` now supports an `action_visual=True` mouse visual debugging mode, which is useful when you need to inspect where the cursor actually moved and what target was really clicked during automation.

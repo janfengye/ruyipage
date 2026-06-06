@@ -375,6 +375,20 @@ python examples/42_xpath_picker_complex_showcase.py
 - open / closed shadow root
 - 复杂文本节点与 SVG 节点
 
+也可以一次性获取当前页面和所有子 frame 内的 open / closed shadow root：
+
+```python
+roots = page.shadow_roots(mode="all")  # all / open / closed
+for root in roots:
+    item = root.ele("#inside")
+```
+
+如果只想扫描当前 browsing context，不递归 iframe：
+
+```python
+roots = page.shadow_roots(mode="all", include_frames=False)
+```
+
 ### 鼠标行为可视化调试
 
 `ruyiPage` 现在支持 `action_visual=True` 的鼠标行为可视化调试模式，适合排查自动化流程里“鼠标到底移动到了哪里、实际点到了哪里”这类问题。
