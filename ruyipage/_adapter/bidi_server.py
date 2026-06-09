@@ -12,8 +12,26 @@ Firefox BiDi Server 架构：
 """
 
 import logging
+import secrets
+import socket
 
 logger = logging.getLogger('ruyipage')
+
+
+def _find_random_free_port(opts):
+    start, end = opts.random_port_range
+    candidates = list(range(start, end + 1))
+    secrets.SystemRandom().shuffle(candidates)
+
+    for port in candidates:
+        try:
+            with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
+                sock.bind(("127.0.0.1", port))
+                return port
+        except OSError:
+            continue
+
+    raise RuntimeError("在端口范围 {}-{} 中找不到可用端口".format(start, end))
 
 
 class BiDiServer:
@@ -65,9 +83,12 @@ class BiDiServer:
         port = opts.port
 
         # 自动端口
-        if opts.auto_port:
+        if opts.random_port:
+            port = _find_random_free_port(opts)
+            opts._set_port_for_launch(port)
+        elif opts.auto_port:
             port = find_free_port(port)
-            opts._port = port
+            opts._set_port_for_launch(port)
 
         # 写入 profile prefs
         if opts.profile_path:

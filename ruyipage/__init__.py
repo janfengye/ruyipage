@@ -199,7 +199,7 @@ def launch(
     private=False,
     xpath_picker=False,
     action_visual=False,
-    port=9222,
+    port=None,
     browser_path=None,
     user_dir=None,
     proxy=None,
@@ -220,7 +220,7 @@ def launch(
         private: 是否启用 Firefox 私密浏览模式
         xpath_picker: 是否启用页面 XPath 选择浮窗
         action_visual: 是否启用鼠标行为可视化调试模式
-        port: 远程调试端口
+        port: 远程调试端口。默认 None，表示使用 10000-65535 随机可用端口。
         browser_path: Firefox 可执行文件路径。
             适用于 Firefox 安装在非默认目录时。
             如果不传，ruyiPage 会优先使用 ``python -m ruyipage install``
@@ -250,7 +250,9 @@ def launch(
         - 当你不确定该配置哪些参数时，先从 launch() 开始。
     """
     opts = FirefoxOptions()
-    opts.set_port(port).quick_start(
+    if port is not None:
+        opts.set_port(port)
+    opts.quick_start(
         headless=headless,
         private=private,
         xpath_picker=xpath_picker,

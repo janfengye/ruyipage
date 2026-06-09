@@ -10,6 +10,7 @@ import sys
 import time
 import atexit
 import socket
+import secrets
 import logging
 import tempfile
 import threading
@@ -668,7 +669,7 @@ class Firefox(object):
         """更新 options/address，并同步进程内端口保留。"""
         if self._reserved_port is not None and self._reserved_port != port:
             self._release_reserved_port(self._reserved_port)
-        self._options.set_port(port)
+        self._options._set_port_for_launch(port)
         self._address = self._options.address
         self._reserve_port(port)
 
@@ -1048,8 +1049,8 @@ class Firefox(object):
 
     def _connect_or_launch(self):
         """连接已有浏览器或启动新的"""
-        # 尝试自动端口
-        if self._options.auto_port:
+        # Dynamic ports are resolved before Firefox is launched.
+        if self._options.auto_port or self._options.random_port:
             with self._launch_lock:
                 port = self._find_free_port()
                 self._set_launch_port(port)
@@ -1224,7 +1225,7 @@ class Firefox(object):
 
     def _ensure_launch_port_available(self):
         """启动前确保目标端口未被其他进程占用。"""
-        if self._options.auto_port:
+        if self._options.auto_port or self._options.random_port:
             return
 
         if not self._is_port_open():
@@ -1755,15 +1756,22 @@ class Firefox(object):
 
     def _find_free_port(self, start=None):
         """查找可用端口"""
-        if start is None:
-            start = self._options.port
-            if (
-                isinstance(self._options.auto_port, int)
-                and self._options.auto_port > 1024
-            ):
-                start = self._options.auto_port
+        if start is None and self._options.random_port:
+            range_start, range_end = self._options.random_port_range
+            candidates = list(range(range_start, range_end + 1))
+            secrets.SystemRandom().shuffle(candidates)
+        else:
+            if start is None:
+                start = self._options.port
+                if (
+                    isinstance(self._options.auto_port, int)
+                    and self._options.auto_port > 1024
+                ):
+                    start = self._options.auto_port
+            range_start, range_end = start, start + 99
+            candidates = range(range_start, range_end + 1)
 
-        for port in range(start, start + 100):
+        for port in candidates:
             if port in self._RESERVED_PORTS:
                 continue
             try:
@@ -1774,7 +1782,7 @@ class Firefox(object):
                 continue
 
         raise BrowserLaunchError(
-            "在端口范围 {}-{} 中找不到可用端口".format(start, start + 100)
+            "在端口范围 {}-{} 中找不到可用端口".format(range_start, range_end)
         )
 
     def __repr__(self):

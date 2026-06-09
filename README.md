@@ -222,7 +222,6 @@ page = launch(
     user_dir=r"D:\ruyipage_userdir",
     headless=False,
     close_on_exit=True,
-    port=9222,
 )
 
 page.get("https://www.example.com")
@@ -233,6 +232,7 @@ page.quit()
 其中：
 
 - `close_on_exit=True` 表示 Python 程序退出时，自动关闭由 `ruyiPage` 启动的浏览器。
+- 默认启动会在 `10000-65535` 中随机选择可用远程调试端口。需要给其他进程接管时，用 `page.browser.address` 获取真实地址；确实需要固定地址时再传 `port=12000` 或其他 1w 以上端口。
 - 如果你希望脚本退出后保留浏览器窗口继续手动操作，可以改成 `close_on_exit=False`。
 - 如果你用的是 `attach()` 或 `existing_only(True)` 接管已有浏览器，即使开启 `close_on_exit=True`，退出时也只会断开连接，不会误关外部浏览器。
 
@@ -248,7 +248,6 @@ from ruyipage import FirefoxOptions, FirefoxPage
 opts = FirefoxOptions()
 opts.set_browser_path(r"D:\Firefox\firefox.exe")
 opts.set_user_dir(r"D:\ruyipage_userdir")
-opts.set_port(9222)
 opts.set_proxy("http://127.0.0.1:7890")
 opts.set_window_size(1440, 900)
 opts.headless(False)
@@ -267,8 +266,9 @@ page.quit()
 | --- | --- | --- |
 | `set_browser_path(path)` | 指定 Firefox 可执行文件路径 | Firefox 不在默认目录、使用便携版、机器上装了多个 Firefox |
 | `set_address(address)` | 设置调试地址 `host:port` | 你已经有固定调试地址，想直接连指定实例 |
-| `set_port(port)` | 设置远程调试端口 | 同机多开、避免和别的浏览器端口冲突 |
-| `set_auto_port(True)` | 自动寻找可用端口 | 不想自己手动挑端口，适合脚本批量启动 |
+| `set_port(port)` | 设置固定远程调试端口，并关闭随机端口 | 需要稳定地址用于 attach / 调试，或明确控制端口 |
+| `set_random_port(start=10000, end=65535)` | 随机选择可用远程调试端口 | 新启动的默认策略，用于避开 9222 这类可预测端口 |
+| `set_auto_port(True)` | 按顺序自动寻找可用端口 | 想要可预测的批量启动行为，但不想手动挑每个端口 |
 | `existing_only(True)` | 只接管已有浏览器，不启动新浏览器 | 连接手动启动的 Firefox、ADS、指纹浏览器 |
 | `set_retry(times, interval)` | 设置连接重试次数和间隔 | 启动慢、远程环境抖动、端口就绪较慢 |
 | `set_profile(path)` | 指定 Firefox profile 目录 | 想长期复用登录态、Cookie、扩展、首选项 |
@@ -485,8 +485,9 @@ page.actions.human_click(ele, algorithm="windmouse").perform()
 ```python
 from ruyipage import attach
 
-# 连接到本机 127.0.0.1:9222 上正在运行的 Firefox
-page = attach("127.0.0.1:9222")
+# 连接到之前由 ruyiPage 启动的 Firefox。
+# 默认随机端口启动时，可从 page.browser.address 获取这个地址。
+page = attach("127.0.0.1:12000")
 
 print(page.title)
 print(page.url)
@@ -508,7 +509,7 @@ page = FirefoxPage(opts)
 ```
 
 **注意**：
-直接传地址字符串 `FirefoxPage('127.0.0.1:9222')` **会尝试启动新浏览器**，
+直接传地址字符串 `FirefoxPage('127.0.0.1:12000')` **会尝试启动新浏览器**，
 而不是连接已有的。如果你要连接已有实例，请使用 `attach()` 或
 显式设置 `existing_only(True)`。
 
@@ -519,10 +520,10 @@ page = FirefoxPage(opts)
 如果 Firefox 已经是你手动打开的，或者是指纹浏览器先打开的，也可以直接接管现有实例。
 
 这套方式适用于任意 **Firefox 内核指纹浏览器**，包括 ADS / FlowerBrowser 这类产品。
-如果浏览器允许固定启动参数，建议加入：
+如果浏览器允许固定启动参数，建议使用 1w 以上端口，避免继续使用 9222：
 
 ```text
---remote-debugging-port=9222
+--remote-debugging-port=12000
 ```
 
 如果后台会把它改写成随机端口，也可以直接使用按进程特征的自动探测接管。
@@ -1714,7 +1715,7 @@ page.extensions.uninstall(ext_id)
 ```python
 from ruyipage import FirefoxOptions, FirefoxPage, CountryMismatchError
 
-opts = FirefoxOptions().set_port(9222)
+opts = FirefoxOptions()
 opts.set_browser_path(r"C:/Program Files/Mozilla Firefox/firefox.exe")
 
 ctx = opts.smart_fingerprint(

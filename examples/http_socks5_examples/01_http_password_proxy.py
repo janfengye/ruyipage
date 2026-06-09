@@ -19,7 +19,8 @@
        httpauth.port:<port>
        httpauth.username:<username>
        httpauth.password:<password>
-4. 不需要调用 ``opts.set_proxy()``，框架会从 fpfile 读取 HTTP host/port。
+4. 不调用 ``opts.set_proxy()``，HTTP 代理 host/port/username/password
+   全部写入临时 fpfile，由支持 ``--fpfile`` 的浏览器内核直接读取。
 """
 
 from __future__ import annotations
@@ -30,6 +31,7 @@ import shutil
 import sys
 import tempfile
 from pathlib import Path
+from urllib.parse import unquote, urlsplit
 
 
 ROOT_DIR = Path(__file__).resolve().parents[2]
@@ -44,6 +46,23 @@ HTTP_PROXY_ENV_PREFIX = "RUYIPAGE_HTTP_PROXY_"
 
 
 def parse_http_proxy(value: str) -> dict[str, str | int]:
+    value = value.strip()
+    if "://" in value:
+        parsed = urlsplit(value)
+        scheme = (parsed.scheme or "").lower()
+        if scheme not in {"http", "https"}:
+            raise ValueError("HTTP proxy must use http:// or https://")
+        if not parsed.hostname or parsed.port is None:
+            raise ValueError("HTTP proxy must include host and port")
+        if parsed.username is None or parsed.password is None:
+            raise ValueError("HTTP proxy must include username and password")
+        return {
+            "host": parsed.hostname,
+            "port": int(parsed.port),
+            "username": unquote(parsed.username),
+            "password": unquote(parsed.password),
+        }
+
     auth, server = value.rsplit("@", 1)
     username, password = auth.split(":", 1)
     host, port = server.rsplit(":", 1)
@@ -58,7 +77,7 @@ def parse_http_proxy(value: str) -> dict[str, str | int]:
 def write_httpauth_fpfile(
     path: str, host: str, port: int, username: str, password: str
 ) -> None:
-    # ruyipage 读取 host/port 写入 profile；指纹内核读取 username/password。
+    # Direct fpfile mode: the custom browser runtime reads all httpauth fields.
     with open(path, "w", encoding="utf-8") as f:
         f.write("httpauth.host:{}\n".format(host))
         f.write("httpauth.port:{}\n".format(port))
@@ -91,11 +110,24 @@ def load_http_proxies() -> list[str]:
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="ruyiPage HTTP password proxy example")
-    parser.add_argument("--proxy", help="username:password@host:port")
+    parser.add_argument("--proxy", help="username:password@host:port or http://username:password@host:port")
     parser.add_argument("--proxy-index", type=int, default=1, help="select RUYIPAGE_HTTP_PROXY_N")
     parser.add_argument("--target", default=TARGET_URL)
     parser.add_argument("--browser-path", default=os.getenv("RUYIPAGE_FIREFOX_PATH"))
-    parser.add_argument("--headless", action="store_true")
+    window_mode = parser.add_mutually_exclusive_group()
+    window_mode.add_argument(
+        "--headless",
+        dest="headless",
+        action="store_true",
+        default=True,
+        help="run without opening a browser window (default)",
+    )
+    window_mode.add_argument(
+        "--headed",
+        dest="headless",
+        action="store_false",
+        help="show the browser window",
+    )
     return parser.parse_args()
 
 

@@ -7,6 +7,11 @@ import sys
 from urllib.parse import urlsplit
 
 
+DEFAULT_REMOTE_DEBUGGING_PORT = 9222
+DEFAULT_RANDOM_PORT_START = 10000
+DEFAULT_RANDOM_PORT_END = 65535
+
+
 class FirefoxOptions(object):
     """Firefox 浏览器启动选项
 
@@ -39,7 +44,7 @@ class FirefoxOptions(object):
             self._browser_path = "firefox"
 
         self._address = "127.0.0.1"
-        self._port = 9222
+        self._port = DEFAULT_REMOTE_DEBUGGING_PORT
         self._profile_path = None
         self._arguments = []
         self._preferences = {}
@@ -57,6 +62,9 @@ class FirefoxOptions(object):
         self._retry_interval = 2.0
         self._proxy = None
         self._auto_port = False
+        self._random_port = True
+        self._random_port_start = DEFAULT_RANDOM_PORT_START
+        self._random_port_end = DEFAULT_RANDOM_PORT_END
         self._user_context = None  # 容器标签页
         self._fpfile = None  # 指纹配置文件路径
         self._source_fpfile = None  # 用户显式传入的原始 fpfile 路径
@@ -151,6 +159,14 @@ class FirefoxOptions(object):
     @property
     def auto_port(self):
         return self._auto_port
+
+    @property
+    def random_port(self):
+        return self._random_port
+
+    @property
+    def random_port_range(self):
+        return (self._random_port_start, self._random_port_end)
 
     @property
     def fpfile(self):
@@ -256,6 +272,8 @@ class FirefoxOptions(object):
             parts = str(address).rsplit(":", 1)
             self._address = parts[0]
             self._port = int(parts[1])
+            self._auto_port = False
+            self._random_port = False
         else:
             self._address = str(address)
         return self
@@ -269,6 +287,13 @@ class FirefoxOptions(object):
         Returns:
             self
         """
+        self._port = int(port)
+        self._auto_port = False
+        self._random_port = False
+        return self
+
+    def _set_port_for_launch(self, port):
+        """Update the selected runtime port without changing port mode."""
         self._port = int(port)
         return self
 
@@ -454,6 +479,9 @@ class FirefoxOptions(object):
             self
         """
         self._existing_only = on_off
+        if on_off:
+            self._auto_port = False
+            self._random_port = False
         return self
 
     def close_on_exit(self, on_off=True):
@@ -486,6 +514,38 @@ class FirefoxOptions(object):
             self
         """
         self._auto_port = on_off
+        self._random_port = False
+        return self
+
+    def set_random_port(
+        self,
+        on_off=True,
+        start=DEFAULT_RANDOM_PORT_START,
+        end=DEFAULT_RANDOM_PORT_END,
+    ):
+        """随机选择远程调试端口。
+
+        Args:
+            on_off: True 启用随机端口，False 关闭随机端口
+            start: 随机端口起始值，默认 10000
+            end: 随机端口结束值，默认 65535
+
+        Returns:
+            self
+        """
+        if not on_off:
+            self._random_port = False
+            return self
+
+        start = int(start)
+        end = int(end)
+        if start < 1025 or end > 65535 or start > end:
+            raise ValueError("随机端口范围必须在 1025-65535 内，且 start <= end")
+
+        self._random_port = True
+        self._auto_port = False
+        self._random_port_start = start
+        self._random_port_end = end
         return self
 
     def set_retry(self, times=None, interval=None):

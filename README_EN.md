@@ -222,7 +222,6 @@ page = launch(
     user_dir=r"D:\ruyipage_userdir",
     headless=False,
     close_on_exit=True,
-    port=9222,
 )
 
 page.get("https://www.example.com")
@@ -233,6 +232,7 @@ page.quit()
 Where:
 
 - `close_on_exit=True` means the browser started by `ruyiPage` is closed automatically when the Python process exits.
+- By default, new launches choose a random available remote-debugging port in `10000-65535`. Use `page.browser.address` if another process needs to attach, or pass `port=12000` / another high fixed port when you explicitly need a stable address.
 - If you want to keep the browser window open for manual follow-up after the script exits, set `close_on_exit=False`.
 - If you are attaching to an existing browser through `attach()` or `existing_only(True)`, Python exit only disconnects the session even when `close_on_exit=True`; it does not close the external browser process.
 
@@ -248,7 +248,6 @@ from ruyipage import FirefoxOptions, FirefoxPage
 opts = FirefoxOptions()
 opts.set_browser_path(r"D:\Firefox\firefox.exe")
 opts.set_user_dir(r"D:\ruyipage_userdir")
-opts.set_port(9222)
 opts.set_proxy("http://127.0.0.1:7890")
 opts.set_window_size(1440, 900)
 opts.headless(False)
@@ -267,8 +266,9 @@ The table below summarizes the `opt` options that users can call directly today.
 | --- | --- | --- |
 | `set_browser_path(path)` | Set the Firefox executable path | Firefox is not in the default location, you use a portable build, or multiple Firefox versions are installed |
 | `set_address(address)` | Set the debug address as `host:port` | You already know the exact debug address and want to connect to that instance |
-| `set_port(port)` | Set the remote debugging port | Multiple browser instances on one machine, or avoiding port conflicts |
-| `set_auto_port(True)` | Automatically find an available port | You do not want to manage ports manually, especially in batch scripts |
+| `set_port(port)` | Set a fixed remote-debugging port and disable random port selection | You need a stable address for attach/debugging, or want to control the exact port |
+| `set_random_port(start=10000, end=65535)` | Randomly choose an available remote-debugging port | Default for new launches; useful for avoiding predictable ports such as 9222 |
+| `set_auto_port(True)` | Sequentially find an available port | You want deterministic batch startup behavior without manually choosing each port |
 | `existing_only(True)` | Attach to an existing browser without launching a new one | Connecting to a manually started Firefox, ADS, or a fingerprint browser |
 | `set_retry(times, interval)` | Configure connection retries and retry interval | Slow startup, remote instability, or delayed debug-port readiness |
 | `set_profile(path)` | Set the Firefox profile directory | Reusing login state, cookies, extensions, and preferences long-term |
@@ -485,8 +485,9 @@ can attach to it via `attach()` — **no new browser will be launched**.
 ```python
 from ruyipage import attach
 
-# Connect to Firefox running on 127.0.0.1:9222
-page = attach("127.0.0.1:9222")
+# Connect to a Firefox instance started earlier by ruyiPage.
+# For default random-port launches, get this value from page.browser.address.
+page = attach("127.0.0.1:12000")
 
 print(page.title)
 print(page.url)
@@ -510,7 +511,7 @@ page = FirefoxPage(opts)
 ```
 
 **Note**:
-Passing a raw address string such as `FirefoxPage('127.0.0.1:9222')`
+Passing a raw address string such as `FirefoxPage('127.0.0.1:12000')`
 **will attempt to launch a new browser**, not attach to an existing one.
 Use `attach()` or explicitly set `existing_only(True)` when you want to
 connect to an already-running instance.
@@ -522,10 +523,10 @@ connect to an already-running instance.
 If Firefox is already open manually, or a fingerprint browser is started first, `ruyiPage` can attach to the existing instance directly.
 
 This flow works for any **Firefox-kernel fingerprint browser**, including products such as ADS / FlowerBrowser.
-If the browser lets you set a fixed startup argument, it is recommended to add:
+If the browser lets you set a fixed startup argument, prefer a high port instead of 9222:
 
 ```text
---remote-debugging-port=9222
+--remote-debugging-port=12000
 ```
 
 If the browser backend rewrites it to a random port, you can still use process-based automatic discovery.
