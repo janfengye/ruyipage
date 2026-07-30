@@ -71,6 +71,7 @@ class FirefoxOptions(object):
         }
         self._existing_only = False
         self._close_on_exit = True
+        self._high_density_mode_enabled = False
         self._retry_times = 10
         self._retry_interval = 2.0
         self._proxy = None
@@ -196,22 +197,18 @@ class FirefoxOptions(object):
 
     @property
     def touch_fallback_enabled(self):
-        """是否启用启动期触摸兼容配置。"""
         return bool(self._touch_fallback_enabled)
 
     @property
     def touch_fallback_profile(self):
-        """启动期触摸兼容配置名称，当前支持 ``mobile``。"""
         return self._touch_fallback_profile
 
     @property
     def touch_fallback_max_touch_points(self):
-        """启动期 fallback 配置的最大触点数。"""
         return self._touch_fallback_max_touch_points
 
     @property
     def touch_fallback_active(self):
-        """当前会话是否已经生成并启用触摸 fpfile。"""
         return bool(self._touch_fallback_enabled and self._runtime_fpfile)
 
     @property
@@ -272,6 +269,10 @@ class FirefoxOptions(object):
     def marionette_enabled(self):
         """是否启用 Marionette 启动通道。"""
         return self._marionette_enabled
+
+    @property
+    def high_density_mode_enabled(self):
+        return self._high_density_mode_enabled
 
     # ===== 链式设置方法 =====
 
@@ -662,23 +663,6 @@ class FirefoxOptions(object):
         return self.set_per_tab_proxies(proxies, exhausted=exhausted)
 
     def set_touch_fallback(self, enabled=True, max_touch_points=1, profile="mobile"):
-        """配置旧版 Firefox 使用的启动期触摸 fpfile fallback。
-
-        该方法只配置启动参数，不会修改用户提供的源 fpfile。启动前会在
-        profile 中生成运行期副本，并写入触摸能力、粗指针和 legacy API 字段。
-
-        Args:
-            enabled: 是否启用 fallback。
-            max_touch_points: 最大触点数，允许 ``0..4294967295``。
-            profile: 兼容配置名称，当前只支持 ``mobile``。
-
-        Returns:
-            FirefoxOptions: 当前配置对象，支持链式调用。
-
-        Raises:
-            TypeError: ``max_touch_points`` 不是整数。
-            ValueError: 触点数越界或 profile 不受支持。
-        """
         profile = str(profile or "mobile").strip().lower()
         if profile not in {"mobile"}:
             raise ValueError("profile 必须是 'mobile'")
@@ -694,7 +678,6 @@ class FirefoxOptions(object):
         return self
 
     def can_install_touch_fallback(self):
-        """返回当前启动模式是否允许生成触摸 fallback 文件。"""
         return bool(
             self._touch_fallback_enabled
             and not self._existing_only
@@ -1031,6 +1014,10 @@ class FirefoxOptions(object):
               profile 写入 ``marionette.enabled=true``。
         """
         self._marionette_enabled = bool(on_off)
+        return self
+
+    def enable_high_density_mode(self, on_off=True):
+        self._high_density_mode_enabled = bool(on_off)
         return self
 
     def set_snapshot_dir(self, path):
@@ -1570,6 +1557,11 @@ class FirefoxOptions(object):
             "browser.newtabpage.activity-stream.feeds.section.topstories", False
         )
         prefs.setdefault("browser.tabs.animate", False)
+        if self._high_density_mode_enabled:
+            prefs.setdefault("dom.ipc.processPrelaunch.enabled", False)
+            prefs.setdefault("dom.ipc.keepProcessesAlive.privilegedabout", 0)
+            prefs.setdefault("browser.sessionstore.resume_from_crash", False)
+            prefs.setdefault("accessibility.force_disabled", 1)
         # 仅在显式启用时才写入该 pref，避免某些环境因 Marionette 启动异常
         # 而在浏览器尚未建立 BiDi 连接前就崩溃/闪退。
         if self._marionette_enabled:

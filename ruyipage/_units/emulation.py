@@ -15,11 +15,11 @@ _UNSET = object()
 
 
 class TouchUnsupportedError(RuyiPageError):
-    """当前 Firefox 不支持运行时触摸覆盖且没有可用 fallback。"""
+    pass
 
 
 class TouchStartupOnlyError(RuyiPageError):
-    """触摸 fallback 仅在启动时生效，当前运行时请求无法完成。"""
+    pass
 
 
 def _validate_max_touch_points(value):
@@ -36,15 +36,6 @@ def _validate_max_touch_points(value):
 
 @dataclass(frozen=True)
 class TouchCapability(object):
-    """当前页面可用的触摸模拟能力。
-
-    Attributes:
-        native_supported: 是否确认支持原生 BiDi 触摸覆盖；未探测时为 ``None``。
-        fallback_configured: 是否配置了启动期 fpfile fallback。
-        fallback_installable: 当前启动模式是否允许安装 fpfile fallback。
-        user_context: 当前 browsing context 所属的 userContext ID。
-    """
-
     native_supported: Optional[bool] = None
     fallback_configured: bool = False
     fallback_installable: bool = False
@@ -53,12 +44,6 @@ class TouchCapability(object):
 
 @dataclass(frozen=True)
 class TouchOverrideResult(object):
-    """一次触摸覆盖请求的结构化结果。
-
-    ``source`` 为 ``native``、``fpfile`` 或 ``none``；``runtime_mutable``
-    表示该结果是否还能在当前浏览器会话中动态修改或重置。
-    """
-
     enabled: bool
     max_touch_points: Optional[int]
     supported: bool
@@ -135,15 +120,6 @@ class EmulationManager(object):
         raise ValueError("scope must be 'context', 'user_context', or 'global'")
 
     def get_touch_capability(self, native_supported=None, user_context=_UNSET):
-        """返回当前页面的触摸模拟能力快照。
-
-        Args:
-            native_supported: 已知的原生 BiDi 支持状态；``None`` 表示尚未探测。
-            user_context: 显式 userContext ID。省略时自动读取当前页面。
-
-        Returns:
-            TouchCapability: 原生支持、fallback 和 userContext 信息。
-        """
         options = self._options()
         fallback_configured = bool(
             options and getattr(options, "touch_fallback_enabled", False)
@@ -191,23 +167,6 @@ class EmulationManager(object):
     def set_touch_enabled_result(
         self, enabled=True, max_touch_points=1, scope="context", strict=False
     ):
-        """设置或清除 ``navigator.maxTouchPoints`` 覆盖并返回详细结果。
-
-        Args:
-            enabled: ``True`` 设置覆盖，``False`` 清除覆盖。
-            max_touch_points: 最大触点数，允许 ``0..4294967295``。
-            scope: ``context``、``user_context`` 或 ``global``。
-            strict: 为 ``True`` 时，不支持或只能启动期生效会直接抛出异常。
-
-        Returns:
-            TouchOverrideResult: 是否应用、实现来源、运行时可变性及失败原因。
-
-        Raises:
-            TypeError: ``max_touch_points`` 不是整数。
-            ValueError: 触点数越界或 ``scope`` 无效。
-            TouchUnsupportedError: strict 模式下原生命令和 fallback 均不可用。
-            TouchStartupOnlyError: strict 模式下请求与启动期 fallback 不匹配。
-        """
         requested_max_touch_points = _validate_max_touch_points(max_touch_points)
         scope_kwargs, user_context = self._touch_scope_kwargs(scope)
         if scope == "user_context" and not user_context:
@@ -374,6 +333,19 @@ class EmulationManager(object):
             device_pixel_ratio=device_pixel_ratio,
             **scope,
         )
+        if device_pixel_ratio is not None:
+            viewport_scope = (
+                {"user_contexts": [user_context]}
+                if user_context
+                else {"context": self._owner._context_id}
+            )
+            bidi_context.set_viewport(
+                self._owner._driver._browser_driver,
+                width=width,
+                height=height,
+                device_pixel_ratio=device_pixel_ratio,
+                **viewport_scope,
+            )
         if result is None:
             bidi_emulation.inject_screen_settings_override(
                 self._owner._driver._browser_driver,
@@ -419,18 +391,15 @@ class EmulationManager(object):
         return self._supported(result)
 
     def set_touch_enabled(self, enabled=True, max_touch_points=1, scope="context"):
-        """设置触摸覆盖并返回是否已应用。
+        """启用/禁用触摸模拟。
 
         Args:
-            enabled: ``True`` 设置覆盖，``False`` 清除覆盖。
-            max_touch_points: 最大触点数，允许 ``0..4294967295``。
-            scope: ``context``、``user_context`` 或 ``global``。
+            enabled: True=启用，False=禁用
+            max_touch_points: 启用时的最大触点数，通常为 1 或 5
+            scope: 'context' / 'global' / 'user_context'
 
         Returns:
-            bool: 原生覆盖或匹配的启动期 fallback 已生效时为 ``True``。
-
-        Notes:
-            需要失败原因和能力信息时使用 :meth:`set_touch_enabled_result`。
+            bool: 当前浏览器是否支持该命令
         """
         return self.set_touch_enabled_result(
             enabled=enabled,
