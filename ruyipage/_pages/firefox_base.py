@@ -164,6 +164,9 @@ class FirefoxBase(BasePage):
         self._context_id = context_id
         self._driver = ContextDriver(browser.driver, context_id)
         self._load_mode = browser.options.load_mode
+        ensure_baseline = getattr(browser, "_ensure_baseline_preload", None)
+        if callable(ensure_baseline):
+            ensure_baseline()
         self._maybe_enable_xpath_picker()
         self._maybe_enable_action_visual()
         self._maybe_enable_trace()
@@ -3403,6 +3406,13 @@ class FirefoxBase(BasePage):
     @property
     def url(self) -> str:
         """当前 URL"""
+        result = bidi_context.get_tree(
+            self._driver._browser_driver,
+            max_depth=0,
+        )
+        for context in result.get("contexts", []):
+            if context.get("context") == self._context_id:
+                return context.get("url", "")
         return self.run_js("location.href") or ""
 
     @property
