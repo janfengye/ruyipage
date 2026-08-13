@@ -219,6 +219,7 @@ def launch(
     trace=False,
     failure_snapshot=False,
     snapshot_dir=None,
+    allow_system_access=None,
 ):
     """快速启动 FirefoxPage（小白友好入口）。
 
@@ -247,6 +248,9 @@ def launch(
         trace: 是否启用 debug trace 记录
         failure_snapshot: 是否启用失败自动诊断快照
         snapshot_dir: 诊断快照保存目录
+        allow_system_access: 是否允许 WebDriver 访问 Firefox 特权上下文。
+            ``None`` 会在 Windows 提权会话中自动开启；``True``/``False``
+            可显式覆盖。开启后会添加 ``--remote-allow-system-access``。
 
     Returns:
         FirefoxPage
@@ -275,6 +279,7 @@ def launch(
         trace=trace,
         failure_snapshot=failure_snapshot,
         snapshot_dir=snapshot_dir,
+        allow_system_access=allow_system_access,
     )
     # Firefox 155 protects about:home from normal BiDi script evaluation.
     if not private:
@@ -298,6 +303,8 @@ def attach(address="127.0.0.1:9222", xpath_picker=False):
     说明:
         - 用于连接“已手动启动”的 Firefox 调试端口。
         - 内部启用 existing_only，避免重复启动浏览器进程。
+        - ``--remote-allow-system-access`` 是 Firefox 启动参数，attach 后无法
+          补加；如需特权上下文访问，必须用该参数预先启动外部 Firefox。
         - 即使设置了 ``close_on_exit(True)``，这里在 Python 退出时也只会
           断开连接，不会主动关闭外部浏览器。
     """

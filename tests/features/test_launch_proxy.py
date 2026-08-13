@@ -2,9 +2,12 @@
 
 from unittest import mock
 
+import pytest
+
 from ruyipage import FirefoxOptions, launch
 from ruyipage._base.browser import Firefox
 from ruyipage._bidi import network as bidi_network
+from ruyipage._configs import firefox_options
 
 
 class _ProxyAuthOptions:
@@ -80,13 +83,132 @@ def test_launch_uses_script_accessible_blank_start_page():
         created_opts["opts"] = opts
         return object()
 
-    with mock.patch("ruyipage.FirefoxPage", side_effect=fake_page):
+    with mock.patch(
+        "ruyipage._configs.firefox_options._is_elevated_windows",
+        return_value=False,
+    ), mock.patch("ruyipage.FirefoxPage", side_effect=fake_page):
         launch()
+        command = created_opts["opts"].build_command()
+        assert "about:blank" in command
+        assert "-remote-allow-system-access" not in command
+        assert "--remote-allow-system-access" not in command
 
-    command = created_opts["opts"].build_command()
-    assert "about:blank" in command
-    assert "-remote-allow-system-access" not in command
-    assert "--remote-allow-system-access" not in command
+
+def test_system_access_defaults_to_elevated_windows_only():
+    with mock.patch.object(
+        firefox_options, "_is_elevated_windows", return_value=True
+    ):
+        elevated_opts = FirefoxOptions()
+        assert elevated_opts.system_access_allowed is True
+        assert elevated_opts.build_command().count(
+            "--remote-allow-system-access"
+        ) == 1
+
+    with mock.patch.object(
+        firefox_options, "_is_elevated_windows", return_value=False
+    ):
+        regular_opts = FirefoxOptions()
+        assert regular_opts.system_access_allowed is False
+        assert "--remote-allow-system-access" not in regular_opts.build_command()
+
+
+def test_elevated_windows_probe_is_disabled_on_other_platforms():
+    with mock.patch.object(firefox_options.sys, "platform", "linux"):
+        assert firefox_options._is_elevated_windows() is False
+
+
+def test_allow_system_access_explicit_overrides_are_chainable():
+    with mock.patch.object(
+        firefox_options, "_is_elevated_windows", return_value=False
+    ):
+        opts = FirefoxOptions()
+        assert opts.system_access_allowed is False
+        assert "--remote-allow-system-access" not in opts.build_command()
+
+        returned = opts.allow_system_access()
+
+        assert returned is opts
+        assert opts.system_access_allowed is True
+        assert opts.build_command().count("--remote-allow-system-access") == 1
+
+        opts.allow_system_access(False)
+        assert opts.system_access_allowed is False
+        assert "--remote-allow-system-access" not in opts.build_command()
+
+    with mock.patch.object(
+        firefox_options, "_is_elevated_windows", return_value=True
+    ):
+        opts = FirefoxOptions().allow_system_access(False)
+        assert opts.system_access_allowed is False
+        assert "--remote-allow-system-access" not in opts.build_command()
+
+
+@pytest.mark.parametrize(
+    "flag",
+    ["-remote-allow-system-access", "--remote-allow-system-access"],
+)
+def test_allow_system_access_normalizes_legacy_arguments(flag):
+    opts = FirefoxOptions().set_argument(flag).allow_system_access()
+
+    assert opts.system_access_allowed is True
+    assert opts.build_command().count("--remote-allow-system-access") == 1
+    assert "-remote-allow-system-access" not in opts.build_command()
+
+    opts.allow_system_access(False)
+    assert opts.system_access_allowed is False
+    assert all("remote-allow-system-access" not in arg for arg in opts.build_command())
+
+
+def test_remove_argument_disables_system_access_aliases():
+    opts = FirefoxOptions().allow_system_access()
+
+    opts.remove_argument("-remote-allow-system-access")
+
+    assert opts.system_access_allowed is False
+    assert all("remote-allow-system-access" not in arg for arg in opts.build_command())
+
+
+def test_quick_start_preserves_or_explicitly_overrides_system_access():
+    opts = FirefoxOptions().allow_system_access().quick_start()
+    assert opts.system_access_allowed is True
+
+    opts.quick_start(allow_system_access=False)
+    assert opts.system_access_allowed is False
+
+    opts.quick_start(allow_system_access=True)
+    assert opts.system_access_allowed is True
+    assert opts.build_command().count("--remote-allow-system-access") == 1
+
+
+def test_launch_forwards_allow_system_access_to_options():
+    created_opts = {}
+
+    def fake_page(opts):
+        created_opts["opts"] = opts
+        return object()
+
+    with mock.patch("ruyipage.FirefoxPage", side_effect=fake_page):
+        launch(allow_system_access=True)
+
+    opts = created_opts["opts"]
+    assert opts.system_access_allowed is True
+    assert opts.build_command().count("--remote-allow-system-access") == 1
+
+
+def test_launch_uses_automatic_system_access_in_elevated_windows():
+    created_opts = {}
+
+    def fake_page(opts):
+        created_opts["opts"] = opts
+        return object()
+
+    with mock.patch(
+        "ruyipage._configs.firefox_options._is_elevated_windows",
+        return_value=True,
+    ), mock.patch("ruyipage.FirefoxPage", side_effect=fake_page):
+        launch()
+        command = created_opts["opts"].build_command()
+        assert command.count("--remote-allow-system-access") == 1
 
 
 def test_private_launch_keeps_firefox_private_start_page():

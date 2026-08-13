@@ -346,10 +346,26 @@ class NetworkManager(object):
                 data_types=["request", "response"],
             )
         """
+        return self._add_data_collector(
+            events,
+            data_types=data_types,
+            max_encoded_data_size=max_encoded_data_size,
+            contexts=self._ctx(),
+        )
+
+    def _add_data_collector(
+        self,
+        events,
+        *,
+        data_types=None,
+        max_encoded_data_size=10485760,
+        contexts=None,
+    ):
+        """Create a collector with an explicit scope for internal fallbacks."""
         result = bidi_network.add_data_collector(
             self._owner._driver,
             events=events,
-            contexts=self._ctx(),
+            contexts=contexts,
             max_encoded_data_size=max_encoded_data_size,
             data_types=data_types,
         )

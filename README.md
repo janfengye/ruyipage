@@ -278,6 +278,7 @@ page.quit()
 | `headless(True/False)` | 设置无头模式 | 服务器运行、后台任务、无需显示界面 |
 | `set_argument(arg, value=None)` | 追加自定义启动参数 | 需要透传 Firefox 原生启动参数 |
 | `remove_argument(arg)` | 移除之前设置过的启动参数 | 复用配置对象时撤销某个参数 |
+| `allow_system_access(True/False)` | 允许或禁止 WebDriver 访问 Firefox 特权上下文 | 仅在父进程、浏览器 UI、扩展或其他特权上下文确实需要自动化时开启 |
 | `set_pref(key, value)` | 写入 Firefox 首选项 | 调整 about:config、代理策略、下载行为等 |
 | `set_window_size(width, height)` | 设置启动窗口大小 | 控制初始分辨率、适配目标站点布局 |
 | `set_proxy(proxy)` | 设置 HTTP / HTTPS / SOCKS 代理 | 需要代理出口、IP 切换、地域访问 |
@@ -297,6 +298,7 @@ page.quit()
 - 不设置 `user_dir` / `profile` 时，`ruyiPage` 会自动创建临时 profile，更适合一次性脚本。
 - `set_fpfile()` 当前主要是把路径通过 `--fpfile=...` 传给浏览器，并读取其中的代理认证字段；如果 `fpfile` 中包含 SOCKS5 的 host/port，且指定了 `user_dir`，ruyipage 会写入对应的 profile 代理 prefs。它不是一个自动填充所有浏览器指纹参数的万能入口。
 - `quick_start()` 适合快速开始，但不是全部配置项的替代品；需要精细控制时，仍建议直接组合 `FirefoxOptions` 的各个方法。
+- Windows 提权会话会自动启用 system access，以兼容 Firefox 155 的远程调试限制；其他环境默认关闭，因为该能力会扩大远程调试权限。可用 `allow_system_access(True/False)` 显式覆盖。它只能在 Firefox 启动时生效；使用 `attach()` 时，外部 Firefox 必须预先带 `--remote-allow-system-access` 启动。
 
 如果你只是想快速启动，优先用 `launch()`；如果你想把浏览器行为写得更明确、更适合对外给用户使用，优先用 `FirefoxOptions`。
 

@@ -11,6 +11,27 @@ DEFAULT_REMOTE_DEBUGGING_PORT = 9222
 DEFAULT_RANDOM_PORT_START = 10000
 DEFAULT_RANDOM_PORT_END = 65535
 UINT32_MAX = (2**32) - 1
+_SYSTEM_ACCESS_ARGUMENTS = {
+    "-remote-allow-system-access",
+    "--remote-allow-system-access",
+}
+
+
+def _is_system_access_argument(arg):
+    name = str(arg).strip().split("=", 1)[0]
+    return name in _SYSTEM_ACCESS_ARGUMENTS
+
+
+def _is_elevated_windows():
+    """Return whether this process has an elevated Windows token."""
+    if sys.platform != "win32":
+        return False
+    try:
+        import ctypes
+
+        return bool(ctypes.windll.shell32.IsUserAnAdmin())
+    except Exception:
+        return False
 
 
 def _validate_touch_max_touch_points(value):
@@ -102,6 +123,10 @@ class FirefoxOptions(object):
         # 启动时会直接崩溃或闪退，导致后续 BiDi 端口连接失败。
         # 默认保持启用以兼容历史行为，但允许用户显式关闭。
         self._marionette_enabled = True  # 是否启用 Marionette 启动通道
+        # None 表示仅在 Windows 提权会话中自动启用；True/False 是显式覆盖。
+        # 这既修复提权环境的 Firefox 155 连接问题，也避免在其他环境中
+        # 无条件扩大 Remote Agent 权限。
+        self._allow_system_access = None
 
     # ===== 属性读取 =====
 
@@ -271,6 +296,13 @@ class FirefoxOptions(object):
         return self._marionette_enabled
 
     @property
+    def system_access_allowed(self):
+        """是否允许 WebDriver 访问 Firefox 的特权上下文。"""
+        if self._allow_system_access is None:
+            return _is_elevated_windows()
+        return self._allow_system_access
+
+    @property
     def high_density_mode_enabled(self):
         return self._high_density_mode_enabled
 
@@ -393,6 +425,8 @@ class FirefoxOptions(object):
         Returns:
             self
         """
+        if _is_system_access_argument(arg):
+            return self.allow_system_access(True)
         if value is not None:
             self._arguments.append("{}={}".format(arg, value))
         else:
@@ -409,6 +443,8 @@ class FirefoxOptions(object):
         Returns:
             self
         """
+        if _is_system_access_argument(arg):
+            return self.allow_system_access(False)
         self._arguments = [
             a for a in self._arguments if a != arg and not a.startswith(arg + "=")
         ]
@@ -1021,6 +1057,26 @@ class FirefoxOptions(object):
         self._marionette_enabled = bool(on_off)
         return self
 
+    def allow_system_access(self, on_off=True):
+        """设置是否允许 WebDriver 访问 Firefox 的特权上下文。
+
+        启用后，启动命令会附加 ``--remote-allow-system-access``。该参数会
+        扩大远程调试权限，仅应在确实需要访问 Firefox 父进程、浏览器 UI、
+        扩展进程或其他特权上下文时开启。
+
+        Args:
+            on_off: ``True`` 启用，``False`` 关闭。
+
+        Returns:
+            self
+        """
+        self._allow_system_access = bool(on_off)
+        self._arguments = [
+            arg for arg in self._arguments
+            if not _is_system_access_argument(arg)
+        ]
+        return self
+
     def enable_high_density_mode(self, on_off=True):
         self._high_density_mode_enabled = bool(on_off)
         return self
@@ -1432,6 +1488,7 @@ class FirefoxOptions(object):
         failure_snapshot=False,
         snapshot_dir=None,
         marionette=True,
+        allow_system_access=None,
     ):
         """小白友好的一键启动预设。
 
@@ -1463,6 +1520,8 @@ class FirefoxOptions(object):
             failure_snapshot: 是否启用失败自动诊断快照
             snapshot_dir: 诊断快照保存目录
             marionette: 是否启用 Firefox Marionette 通道
+            allow_system_access: 是否允许 WebDriver 访问 Firefox 特权上下文。
+                ``None`` 保留当前设置；``True``/``False`` 显式启用或关闭。
 
         Returns:
             self
@@ -1500,6 +1559,8 @@ class FirefoxOptions(object):
         self.enable_trace(trace)
         self.enable_failure_snapshot(failure_snapshot)
         self.enable_marionette(marionette)
+        if allow_system_access is not None:
+            self.allow_system_access(allow_system_access)
         if snapshot_dir:
             self.set_snapshot_dir(snapshot_dir)
         return self
@@ -1514,6 +1575,8 @@ class FirefoxOptions(object):
 
         cmd.append("--remote-debugging-port={}".format(self._port))
         cmd.append("--no-remote")
+        if self.system_access_allowed:
+            cmd.append("--remote-allow-system-access")
         # Marionette 不是 BiDi 主链路必需项；若某些环境带该参数会闪退，
         # 可通过 enable_marionette(False) 关闭，仅保留 remote-debugging-port。
         if self._marionette_enabled:
@@ -1534,6 +1597,8 @@ class FirefoxOptions(object):
             cmd.append("--fpfile={}".format(self._fpfile))
 
         for arg in self._arguments:
+            if _is_system_access_argument(arg):
+                continue
             cmd.append(arg)
 
         return cmd

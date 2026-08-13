@@ -9,11 +9,22 @@ from queue import Empty, Queue
 from threading import Lock
 
 from .._bidi import session as bidi_session
+from ..errors import BiDiError
 from .._functions.queue_utils import queue_get as _queue_get
 from .._functions.settings import Settings
 from .._functions.sleep import sleep as _sleep
 
 logger = logging.getLogger("ruyipage")
+
+
+def _needs_global_scope_fallback(exc):
+    if exc.error != "unsupported operation":
+        return False
+    message = (exc.bidi_message or "").lower()
+    return (
+        "privileged scope" in message
+        or "system access is required" in message
+    )
 
 
 def _headers_from_bidi(headers):
@@ -287,6 +298,8 @@ class CaptureManager(object):
         self._request_collector = None
         self._response_collector = None
         self._collect_bodies = True
+        self._capture_driver = None
+        self._capture_browser_driver = None
 
     @property
     def active(self):
@@ -352,11 +365,26 @@ class CaptureManager(object):
         self._response_collector = None
         if collect_bodies:
             try:
-                collector = self._owner.network.add_data_collector(
-                    ["beforeRequestSent", "responseCompleted"],
-                    data_types=["request", "response"],
-                    max_encoded_data_size=max_body_size,
-                )
+                try:
+                    collector = self._owner.network.add_data_collector(
+                        ["beforeRequestSent", "responseCompleted"],
+                        data_types=["request", "response"],
+                        max_encoded_data_size=max_body_size,
+                    )
+                except BiDiError as exc:
+                    if not _needs_global_scope_fallback(exc):
+                        raise
+                    logger.warning(
+                        "Context-scoped capture data collector failed; "
+                        "retrying globally: %s",
+                        exc,
+                    )
+                    collector = self._owner.network._add_data_collector(
+                        ["beforeRequestSent", "responseCompleted"],
+                        data_types=["request", "response"],
+                        max_encoded_data_size=max_body_size,
+                        contexts=None,
+                    )
                 self._request_collector = collector
                 self._response_collector = collector
             except Exception as exc:
@@ -367,17 +395,62 @@ class CaptureManager(object):
             "network.responseCompleted",
             "network.fetchError",
         ]
-        result = bidi_session.subscribe(
-            self._owner._driver._browser_driver,
-            events,
-            contexts=[self._owner._context_id],
-        )
-        self._subscription_id = result.get("subscription")
-
+        browser_driver = self._owner._driver._browser_driver
         driver = self._owner._driver
-        driver.set_callback("network.beforeRequestSent", self._on_request)
-        driver.set_callback("network.responseCompleted", self._on_response)
-        driver.set_callback("network.fetchError", self._on_fetch_error)
+        self._capture_driver = driver
+        self._capture_browser_driver = browser_driver
+        self._subscription_id = None
+        registered_events = []
+        try:
+            try:
+                result = bidi_session.subscribe(
+                    browser_driver,
+                    events,
+                    contexts=[self._owner._context_id],
+                )
+            except BiDiError as exc:
+                if not _needs_global_scope_fallback(exc):
+                    raise
+                logger.warning(
+                    "Context-scoped capture subscription failed; "
+                    "retrying globally: %s",
+                    exc,
+                )
+                result = bidi_session.subscribe(browser_driver, events)
+            self._subscription_id = result.get("subscription")
+
+            driver.set_callback("network.beforeRequestSent", self._on_request)
+            registered_events.append("network.beforeRequestSent")
+            driver.set_callback("network.responseCompleted", self._on_response)
+            registered_events.append("network.responseCompleted")
+            driver.set_callback("network.fetchError", self._on_fetch_error)
+            registered_events.append("network.fetchError")
+        except Exception:
+            for event in registered_events:
+                try:
+                    driver.remove_callback(event)
+                except Exception:
+                    pass
+            if self._subscription_id:
+                try:
+                    bidi_session.unsubscribe(
+                        browser_driver,
+                        subscription=self._subscription_id,
+                    )
+                except Exception:
+                    pass
+            self._subscription_id = None
+            collector = self._response_collector or self._request_collector
+            if collector:
+                try:
+                    collector.remove()
+                except Exception:
+                    pass
+            self._request_collector = None
+            self._response_collector = None
+            self._capture_driver = None
+            self._capture_browser_driver = None
+            raise
 
         self._active = True
         return self
@@ -405,17 +478,18 @@ class CaptureManager(object):
         if self._subscription_id:
             try:
                 bidi_session.unsubscribe(
-                    self._owner._driver._browser_driver,
+                    self._capture_browser_driver,
                     subscription=self._subscription_id,
                 )
             except Exception:
                 pass
             self._subscription_id = None
 
-        driver = self._owner._driver
-        driver.remove_callback("network.beforeRequestSent")
-        driver.remove_callback("network.responseCompleted")
-        driver.remove_callback("network.fetchError")
+        driver = self._capture_driver
+        if driver:
+            driver.remove_callback("network.beforeRequestSent")
+            driver.remove_callback("network.responseCompleted")
+            driver.remove_callback("network.fetchError")
 
         collector = self._response_collector or self._request_collector
         if collector:
@@ -425,6 +499,8 @@ class CaptureManager(object):
                 pass
         self._request_collector = None
         self._response_collector = None
+        self._capture_driver = None
+        self._capture_browser_driver = None
         with self._lock:
             self._pending = {}
         return self

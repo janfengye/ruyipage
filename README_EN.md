@@ -278,6 +278,7 @@ The table below summarizes the `opt` options that users can call directly today.
 | `headless(True/False)` | Enable or disable headless mode | Servers, background jobs, or flows that do not need a visible UI |
 | `set_argument(arg, value=None)` | Add a custom startup argument | Passing through native Firefox startup flags |
 | `remove_argument(arg)` | Remove a previously added startup argument | Reusing an options object and undoing a startup flag |
+| `allow_system_access(True/False)` | Allow or deny WebDriver access to privileged Firefox contexts | Enable only when automating the parent process, browser UI, extensions, or another privileged context |
 | `set_pref(key, value)` | Write Firefox preferences | Adjusting `about:config`, proxy behavior, download behavior, and other browser prefs |
 | `set_window_size(width, height)` | Set the startup window size | Controlling initial viewport/layout behavior for target sites |
 | `set_proxy(proxy)` | Set an HTTP / HTTPS / SOCKS proxy | Proxy routing, IP switching, geo-specific access |
@@ -297,6 +298,7 @@ Notes:
 - If you do not set `user_dir` / `profile`, `ruyiPage` creates a temporary profile automatically. That is convenient for one-off scripts.
 - `set_fpfile()` currently mainly passes the path via `--fpfile=...` and reads proxy-auth fields from that file. If `fpfile` contains SOCKS5 host/port data and `user_dir` is set, ruyipage writes the matching profile proxy prefs. It should not be described as a universal auto-fingerprint configuration entry.
 - `quick_start()` is a convenience preset, not a replacement for every `FirefoxOptions` method. When you need precise control, combine the individual `FirefoxOptions` methods directly.
+- System access is enabled automatically in elevated Windows sessions to handle Firefox 155 remote-debugging restrictions. It remains disabled by default elsewhere because it broadens remote-debugging privileges; use `allow_system_access(True/False)` to override the automatic choice. It only takes effect at Firefox startup; with `attach()`, the external Firefox process must already have been started with `--remote-allow-system-access`.
 
 If you only want the fastest way to launch, use `launch()`. If you want startup behavior to be more explicit and easier to hand off to end users, prefer `FirefoxOptions`.
 
