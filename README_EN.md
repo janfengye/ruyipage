@@ -572,6 +572,25 @@ Unlike many automation libraries that rely heavily on CDP (Chrome DevTools Proto
 - **Built-in user context isolation**, suitable for multi-account and multi-session flows in one browser
 - **High-level APIs that are easy to get started with**, which also helps teams keep a consistent code style
 
+### BiDi Specification Sync
+
+The repository keeps a reproducible W3C Editor's Draft snapshot and a
+source-derived coverage report:
+
+- [Specification snapshot](examples/w3c_bidi/w3c_bidi_apis.json)
+- [Coverage report](examples/w3c_bidi/W3C_BIDI_COMPARISON.md)
+
+All 67 commands in the current core snapshot have low-level `_bidi` wrappers,
+and all 24 events can be subscribed through the generic `page.events` entry
+point. External specifications such as Bluetooth and Permissions are tracked
+separately. Whether a new command works at runtime still depends on the Firefox
+version.
+
+```bash
+python examples/w3c_bidi/extract_w3c_bidi.py --check
+python examples/w3c_bidi/generate_comparison.py --check
+```
+
 ### High-Risk Scenario Recommendation
 
 If your target site is highly sensitive to automation, the Firefox kernel solution provided by this project is the recommended first choice, or use any Firefox fingerprint browser:
@@ -600,10 +619,10 @@ Before diving into the details, this table gives a quick overview of what `ruyiP
 | Navigation events | `page.navigation` | `navigationStarted`, `load`, `historyUpdated`, etc. |
 | Generic events | `page.events` | `browsingContext` / `network` / `script` / `input` / `log` events |
 | Network control | `page.capture` / `page.network` / `page.intercept` | Passive capture, headers, cache control, interception, mocking, fail, collector |
-| Browsing contexts | `page.contexts` | `getTree`, create tab/window, reload, viewport |
+| Browsing contexts | `page.contexts` | `getTree`, create tab/window, reload, viewport, screencast |
 | Browser-level tools | `page.browser_tools` | user contexts, client windows |
 | Script capabilities | `page.get_realms()` / `page.eval_handle()` / `page.disown_handles()` | realms, remote handles, preload scripts |
-| Emulation | `page.emulation` | UA, viewport, screen, orientation, JS toggle |
+| Emulation | `page.emulation` | UA, viewport, screen, orientation, media features, viewport meta, JS toggle |
 | WebExtension | `page.extensions` | Install unpacked extensions, install xpi, uninstall |
 | Local storage | `page.local_storage` / `page.session_storage` | Read and write local/session storage |
 
@@ -1394,7 +1413,6 @@ Where:
 
 ```python
 collector = page.network.add_data_collector(
-    ["responseCompleted"],
     data_types=["response"],
 )
 

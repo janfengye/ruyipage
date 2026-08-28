@@ -569,6 +569,22 @@ print(page.url)
 - **支持 user context 隔离**，适合同浏览器多账号、多会话并行
 - **高层 API 可直接上手**，更适合新手和团队统一维护
 
+### BiDi 规范同步
+
+仓库内维护了可复现的 W3C Editor's Draft 快照和源码覆盖报告：
+
+- [规范快照](examples/w3c_bidi/w3c_bidi_apis.json)
+- [覆盖报告](examples/w3c_bidi/W3C_BIDI_COMPARISON.md)
+
+当前核心规范快照中的 67 个命令均有 `_bidi` 底层封装，24 个事件均可通过
+`page.events` 通用入口订阅。Bluetooth、Permissions 等外部扩展规范单独统计；
+浏览器是否实现某个新命令仍取决于 Firefox 版本。
+
+```bash
+python examples/w3c_bidi/extract_w3c_bidi.py --check
+python examples/w3c_bidi/generate_comparison.py --check
+```
+
 ### 高风控场景推荐
 
 如果你的目标站点对自动化非常敏感，优先推荐使用本项目提供的 Firefox 内核方案，或配合任意 Firefox 指纹浏览器使用：
@@ -597,10 +613,10 @@ print(page.url)
 | 导航事件 | `page.navigation` | navigationStarted、load、historyUpdated 等 |
 | 通用事件 | `page.events` | browsingContext / network / script / input / log 事件 |
 | 网络控制 | `page.capture` / `page.network` / `page.intercept` | 被动抓包、请求头、缓存控制、拦截、mock、fail、collector |
-| 浏览上下文 | `page.contexts` | getTree、create tab/window、reload、viewport |
+| 浏览上下文 | `page.contexts` | getTree、create tab/window、reload、viewport、screencast |
 | 浏览器级能力 | `page.browser_tools` | user context、client window |
 | 脚本能力 | `page.get_realms()` / `page.eval_handle()` / `page.disown_handles()` | realms、远程对象句柄、preload script |
-| Emulation | `page.emulation` | UA、viewport、screen、orientation、JS 开关 |
+| Emulation | `page.emulation` | UA、viewport、screen、orientation、媒体特征、viewport meta、JS 开关 |
 | WebExtension | `page.extensions` | 安装目录扩展、安装 xpi、卸载 |
 | 本地存储 | `page.local_storage` / `page.session_storage` | 读写本地存储和会话存储 |
 
@@ -1430,7 +1446,6 @@ page.network.set_cache_behavior("bypass")
 
 ```python
 collector = page.network.add_data_collector(
-    ["responseCompleted"],
     data_types=["response"],
 )
 
