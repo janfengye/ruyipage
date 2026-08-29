@@ -41,6 +41,7 @@ _STEP_LIMITS = {
     "over": "next",
     "into": "step",
     "out": "finish",
+    "restart": "restart",
 }
 
 
@@ -241,7 +242,15 @@ class Frame(object):
 class PausedState(object):
     """一次暂停的快照。"""
 
-    __slots__ = ("why", "message", "exception", "frame", "pause_actor", "_raw")
+    __slots__ = (
+        "why",
+        "message",
+        "exception",
+        "event_breakpoint",
+        "frame",
+        "pause_actor",
+        "_raw",
+    )
 
     def __init__(self, packet, source_urls=None):
         self._raw = packet
@@ -252,6 +261,8 @@ class PausedState(object):
         self.exception = (
             _grip_to_python(why["exception"]) if "exception" in why else None
         )
+        # 事件断点暂停时带上触发的事件 id
+        self.event_breakpoint = why.get("breakpoint")
         frame_form = packet.get("frame") or {}
         self.frame = Frame(frame_form, source_urls) if frame_form else None
         self.pause_actor = packet.get("actor")
@@ -277,6 +288,20 @@ class PausedState(object):
     def is_exception(self):
         """是否因为 JS 抛异常而暂停；抛出的值在 :attr:`exception`。"""
         return self.why == "exception"
+
+    @property
+    def is_event_breakpoint(self):
+        """是否因为事件断点而暂停；事件 id 在 :attr:`event_breakpoint`。"""
+        return self.why == "eventBreakpoint"
+
+    @property
+    def is_xhr(self):
+        """是否因为 XHR/fetch 断点而暂停。
+
+        内核用的常量是大写的 ``"XHR"``（``PAUSE_REASONS.XHR``），
+        与其他小写驼峰的原因不同。
+        """
+        return self.why == "XHR"
 
     @property
     def raw(self):
@@ -706,6 +731,174 @@ class Debugger(object):
         )
         return self
 
+    def include_async_frames(self, enabled=True):
+        """调用栈是否包含异步父帧。
+
+        现代页面大量使用 async/await，同步栈往往只剩一层，看不出是谁发起的。
+        打开后 :meth:`frames` 会继续向上追溯异步调用链，帧上的
+        ``asyncCause`` 说明它是被什么衔接过来的。
+        """
+        self._require_started()
+        self._rdp.request(
+            self._thread_actor,
+            "reconfigure",
+            options={
+                "shouldIncludeSavedFrames": bool(enabled),
+                "shouldIncludeAsyncLiveFrames": bool(enabled),
+            },
+        )
+        return self
+
+    def skip_breakpoints(self, skip=True):
+        """临时忽略全部断点，不必逐个删除再重建。
+
+        走 ``reconfigure``：thread actor 独立的 ``skipBreakpoints`` 请求在
+        Firefox 155 上的 spec 把响应写成了 ``Arg`` 而非 ``RetVal``，服务端会
+        直接拒绝，因此不能用。
+
+        Returns:
+            self
+        """
+        self._require_started()
+        self._rdp.request(
+            self._thread_actor,
+            "reconfigure",
+            options={"skipBreakpoints": bool(skip)},
+        )
+        return self
+
+    # ── 黑盒化 ──
+
+    def blackbox(self, url, start_line=None, end_line=None):
+        """把某个源标记为黑盒，单步时不再进入其中。
+
+        真实页面里不做黑盒化，``step_into`` 会一头扎进 React / jQuery 之类的
+        框架内部，很难走回自己的代码。
+
+        Args:
+            url: 源 URL（支持后缀匹配）。同 URL 的多段内联脚本会一并标记。
+            start_line: 只黑盒某个行区间时的起始行（含）。
+            end_line: 行区间的结束行（含）。
+
+        Returns:
+            bool: 当前是否正暂停在该源里
+
+        Raises:
+            DebuggerError: 源不存在，或只给了区间的一端
+        """
+        return self._set_blackbox(url, True, start_line, end_line)
+
+    def unblackbox(self, url, start_line=None, end_line=None):
+        """取消黑盒标记，参数含义同 :meth:`blackbox`。"""
+        return self._set_blackbox(url, False, start_line, end_line)
+
+    def blackboxed(self):
+        """返回当前被标记为黑盒的源 URL 列表。"""
+        return sorted(
+            {source.url for source in self.sources() if source.is_black_boxed}
+        )
+
+    def _set_blackbox(self, url, on, start_line, end_line):
+        self._require_started()
+
+        if (start_line is None) != (end_line is None):
+            raise DebuggerError("行区间需要同时提供 start_line 和 end_line")
+
+        range_ = None
+        if start_line is not None:
+            range_ = {
+                "start": {"line": int(start_line), "column": 0},
+                "end": {"line": int(end_line), "column": 0},
+            }
+
+        paused_in_source = False
+        for source in self._resolve_sources(url):
+            reply = self._rdp.request(
+                source.actor, "blackbox" if on else "unblackbox", range=range_
+            )
+            paused_in_source = paused_in_source or bool(reply.get("pausedInSource"))
+        return paused_in_source
+
+    # ── 事件与网络断点 ──
+
+    def available_event_breakpoints(self):
+        """列出内核支持的事件断点。
+
+        Returns:
+            dict: 分组名到该组事件 id 列表的映射，例如
+            ``{"Mouse": ["event.mouse.click", ...], ...}``。这些 id 就是
+            :meth:`set_event_breakpoints` 的入参。
+        """
+        self._require_started()
+        groups = (
+            self._rdp.request(
+                self._thread_actor, "getAvailableEventBreakpoints"
+            ).get("value")
+            or []
+        )
+        return {
+            group.get("name", ""): [
+                event.get("id") for event in group.get("events") or []
+            ]
+            for group in groups
+        }
+
+    def set_event_breakpoints(self, ids):
+        """在指定的 DOM 事件被派发时暂停。
+
+        不需要预先知道处理器写在哪个文件哪一行，适合「点击后为什么没反应」
+        这类排查。暂停时 ``PausedState.why`` 为 ``'eventBreakpoint'``。
+
+        Args:
+            ids: 事件 id 列表，如 ``["event.mouse.click"]``。
+                传空列表即清除全部事件断点。
+
+        Returns:
+            self
+        """
+        self._require_started()
+        self._rdp.request(
+            self._thread_actor, "setActiveEventBreakpoints", ids=list(ids or [])
+        )
+        return self
+
+    def active_event_breakpoints(self):
+        """返回当前生效的事件断点 id 列表。"""
+        self._require_started()
+        return list(
+            self._rdp.request(
+                self._thread_actor, "getActiveEventBreakpoints"
+            ).get("ids")
+            or []
+        )
+
+    def set_xhr_breakpoint(self, path="", method="ANY"):
+        """在请求 URL 含指定片段时暂停。
+
+        Args:
+            path: URL 需要包含的子串。空串匹配所有请求。
+            method: 请求方法，``"ANY"`` 表示不限。
+
+        Returns:
+            bool: 服务端确认结果
+        """
+        self._require_started()
+        reply = self._rdp.request(
+            self._thread_actor, "setXHRBreakpoint", path=str(path), method=str(method)
+        )
+        return bool(reply.get("value", True))
+
+    def remove_xhr_breakpoint(self, path="", method="ANY"):
+        """移除一个 XHR 断点，参数需与设置时一致。"""
+        self._require_started()
+        reply = self._rdp.request(
+            self._thread_actor,
+            "removeXHRBreakpoint",
+            path=str(path),
+            method=str(method),
+        )
+        return bool(reply.get("value", True))
+
     def wait_paused(self, timeout=30):
         """等待下一次暂停。
 
@@ -747,6 +940,14 @@ class Debugger(object):
     def step_out(self):
         """跳出当前函数。"""
         return self._resume(limit="out")
+
+    def restart_frame(self):
+        """回到当前帧的入口重新执行它。
+
+        改完条件想重跑一遍这次调用时很有用，不必刷新页面重来。注意函数此前
+        造成的副作用不会被撤销。
+        """
+        return self._resume(limit="restart")
 
     def _resume(self, limit=None):
         self._require_started()

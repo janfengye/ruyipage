@@ -627,7 +627,7 @@ Before diving into the details, this table gives a quick overview of what `ruyiP
 | Browser-level tools | `page.browser_tools` | user contexts, client windows |
 | Script capabilities | `page.get_realms()` / `page.eval_handle()` / `page.disown_handles()` | realms, remote handles, preload scripts |
 | Emulation | `page.emulation` | UA, viewport, screen, orientation, media features, viewport meta, JS toggle |
-| JS debugging | `page.debugger` | Breakpoints, conditional breakpoints, stepping, call stack, scope, source reading, object expansion, pause on exception |
+| JS debugging | `page.debugger` | Breakpoints, conditional breakpoints, event/XHR breakpoints, stepping, call stack, scope, source reading, object expansion, pause on exception, blackboxing |
 | WebExtension | `page.extensions` | Install unpacked extensions, install xpi, uninstall |
 | Local storage | `page.local_storage` / `page.session_storage` | Read and write local/session storage |
 
@@ -1789,6 +1789,62 @@ if state.is_exception:
 
 `pause_on_debugger_statement()` controls whether JS `debugger` statements pause.
 
+### Event and XHR breakpoints
+
+Break on behaviour instead of having to know which file and line a handler lives in:
+
+```python
+# which events does the kernel support (group name -> event ids)
+print(page.debugger.available_event_breakpoints())
+
+# pause whenever any click handler runs
+page.debugger.set_event_breakpoints(['event.mouse.click'])
+
+state = page.debugger.wait_paused(timeout=30)
+if state.is_event_breakpoint:
+    print(state.event_breakpoint)      # 'event.mouse.click'
+    print(page.debugger.frames())      # shows exactly where the handler is
+
+page.debugger.set_event_breakpoints([])   # an empty list clears them
+```
+
+```python
+# pause when a request URL contains /api/
+page.debugger.set_xhr_breakpoint('/api/', method='GET')
+
+state = page.debugger.wait_paused(timeout=30)
+if state.is_xhr:
+    print(page.debugger.frames())      # who issued this request
+
+page.debugger.remove_xhr_breakpoint('/api/', method='GET')
+```
+
+An empty `path` with `method='ANY'` matches every request. Both kinds are effective for "the click does nothing" and "where does this request come from" investigations.
+
+### Blackboxing framework code
+
+Without blackboxing on a real page, `step_into` dives straight into React or jQuery internals and it is hard to get back to your own code:
+
+```python
+page.debugger.blackbox('https://cdn.example.com/react.min.js')
+page.debugger.blackbox('vendor.js', start_line=1, end_line=5000)   # or just a line range
+
+print(page.debugger.blackboxed())      # currently flagged sources
+page.debugger.unblackbox('vendor.js')
+```
+
+Several inline scripts in one HTML document share a URL and are all flagged together.
+
+### Other execution controls
+
+```python
+page.debugger.skip_breakpoints(True)    # ignore every breakpoint without deleting them
+page.debugger.restart_frame()           # re-run the current frame from its entry (side effects are not undone)
+page.debugger.include_async_frames()    # include async parent frames in the call stack
+```
+
+`include_async_frames()` matters on modern pages: with heavy async/await the synchronous stack is often a single frame and reveals nothing about the caller. Once enabled, each frame's `asyncCause` explains how it was chained.
+
 ### ⚠️ Required reading
 
 **While JS is paused, every BiDi call that needs the JS thread blocks until timeout** (`run_js`, clicking, reading element text). The call that triggers a breakpoint must therefore run on a background thread:
@@ -1819,6 +1875,8 @@ page.debugger.start(auto_resume_after=30)
 ### Current limitations
 
 - **Arbitrary expressions cannot be evaluated while paused.** This is a protocol limitation rather than a gap: Firefox's `evaluateJSAsync` never delivers its result during a pause, and the `frame` actor has no eval method. Use `scope()` + `expand()` + `get_property()` to read state instead.
+- **Variable values cannot be modified.** The `environment` actor spec declares an empty `methods` map, so it is read-only.
+- **Script source cannot be hot-patched.** Firefox never implemented anything like CDP's `setScriptSource` live edit.
 - **Only the top-level tab is covered**; JS inside iframes and Workers is out of reach.
 - **No source map resolution** — the server only exposes `sourceMapURL` metadata, so minified line numbers must be mapped client-side.
 - RDP is a Firefox-private protocol with no cross-version compatibility guarantee.

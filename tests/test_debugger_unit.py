@@ -1178,6 +1178,256 @@ def test_watchdog_is_off_by_default():
     assert debugger.paused is True
 
 
+def test_restart_frame_uses_restart_resume_limit():
+    debugger = _debugger()
+    debugger._handle_paused(PAUSED_PACKET)
+
+    debugger.restart_frame()
+
+    _actor, type_, params = debugger._rdp.calls[-1]
+    assert type_ == "resume"
+    assert params["resumeLimit"] == {"type": "restart"}
+
+
+def test_skip_breakpoints_goes_through_reconfigure():
+    """thread.skipBreakpoints 的 spec 在 Firefox 155 上是坏的，只能用 reconfigure。"""
+    debugger = _debugger()
+
+    debugger.skip_breakpoints(True)
+
+    actor, type_, params = debugger._rdp.calls[-1]
+    assert (actor, type_) == ("thread1", "reconfigure")
+    assert params["options"] == {"skipBreakpoints": True}
+
+
+def test_include_async_frames_sets_both_reconfigure_flags():
+    debugger = _debugger()
+
+    debugger.include_async_frames()
+
+    _actor, _type, params = debugger._rdp.calls[-1]
+    assert params["options"] == {
+        "shouldIncludeSavedFrames": True,
+        "shouldIncludeAsyncLiveFrames": True,
+    }
+
+
+# ── 黑盒化 ──
+
+
+def _blackbox_debugger(extra=None):
+    replies = {
+        ("thread1", "sources"): {
+            "sources": [
+                {"actor": "lib1", "url": "https://cdn.test/react.js"},
+                {"actor": "app1", "url": "https://x.test/app.js"},
+            ]
+        },
+        ("lib1", "blackbox"): {"pausedInSource": False},
+        ("lib1", "unblackbox"): {},
+    }
+    replies.update(extra or {})
+    return _debugger(replies)
+
+
+def test_blackbox_marks_whole_source_by_default():
+    debugger = _blackbox_debugger()
+
+    assert debugger.blackbox("react.js") is False
+
+    actor, type_, params = debugger._rdp.calls[-1]
+    assert (actor, type_) == ("lib1", "blackbox")
+    assert params == {"range": None}
+
+
+def test_blackbox_supports_a_line_range():
+    debugger = _blackbox_debugger()
+
+    debugger.blackbox("react.js", start_line=10, end_line=200)
+
+    _actor, _type, params = debugger._rdp.calls[-1]
+    assert params["range"] == {
+        "start": {"line": 10, "column": 0},
+        "end": {"line": 200, "column": 0},
+    }
+
+
+def test_blackbox_rejects_a_half_specified_range():
+    debugger = _blackbox_debugger()
+
+    with pytest.raises(DebuggerError, match="start_line 和 end_line"):
+        debugger.blackbox("react.js", start_line=10)
+
+
+def test_blackbox_applies_to_every_inline_script_of_one_url():
+    """同一 HTML 的多段内联脚本共用 URL，必须逐个标记。"""
+    debugger = _debugger(
+        {
+            ("thread1", "sources"): {
+                "sources": [
+                    {"actor": "inline1", "url": "https://x.test/page.html"},
+                    {"actor": "inline2", "url": "https://x.test/page.html"},
+                ]
+            },
+            ("inline1", "blackbox"): {"pausedInSource": False},
+            ("inline2", "blackbox"): {"pausedInSource": True},
+        }
+    )
+
+    assert debugger.blackbox("https://x.test/page.html") is True
+
+    targets = [a for a, t, _p in debugger._rdp.calls if t == "blackbox"]
+    assert targets == ["inline1", "inline2"]
+
+
+def test_unblackbox_uses_the_matching_request():
+    debugger = _blackbox_debugger()
+
+    debugger.unblackbox("react.js")
+
+    actor, type_, _params = debugger._rdp.calls[-1]
+    assert (actor, type_) == ("lib1", "unblackbox")
+
+
+def test_blackboxed_lists_flagged_sources():
+    debugger = _debugger(
+        {
+            ("thread1", "sources"): {
+                "sources": [
+                    {
+                        "actor": "lib1",
+                        "url": "https://cdn.test/react.js",
+                        "isBlackBoxed": True,
+                    },
+                    {"actor": "app1", "url": "https://x.test/app.js"},
+                ]
+            }
+        }
+    )
+
+    assert debugger.blackboxed() == ["https://cdn.test/react.js"]
+
+
+# ── 事件与 XHR 断点 ──
+
+
+def test_available_event_breakpoints_groups_ids_by_category():
+    debugger = _debugger(
+        {
+            ("thread1", "getAvailableEventBreakpoints"): {
+                "value": [
+                    {
+                        "name": "Mouse",
+                        "events": [
+                            {"id": "event.mouse.click", "name": "click"},
+                            {"id": "event.mouse.mousedown", "name": "mousedown"},
+                        ],
+                    },
+                    {"name": "Keyboard", "events": [{"id": "event.keyboard.keydown"}]},
+                ]
+            }
+        }
+    )
+
+    assert debugger.available_event_breakpoints() == {
+        "Mouse": ["event.mouse.click", "event.mouse.mousedown"],
+        "Keyboard": ["event.keyboard.keydown"],
+    }
+
+
+def test_set_event_breakpoints_sends_ids():
+    debugger = _debugger()
+
+    debugger.set_event_breakpoints(["event.mouse.click"])
+
+    assert debugger._rdp.calls[-1] == (
+        "thread1",
+        "setActiveEventBreakpoints",
+        {"ids": ["event.mouse.click"]},
+    )
+
+
+def test_set_event_breakpoints_clears_with_empty_list():
+    debugger = _debugger()
+
+    debugger.set_event_breakpoints([])
+
+    _actor, _type, params = debugger._rdp.calls[-1]
+    assert params == {"ids": []}
+
+
+def test_active_event_breakpoints_returns_ids():
+    debugger = _debugger(
+        {("thread1", "getActiveEventBreakpoints"): {"ids": ["event.mouse.click"]}}
+    )
+
+    assert debugger.active_event_breakpoints() == ["event.mouse.click"]
+
+
+def test_event_breakpoint_pause_is_identified():
+    debugger = _debugger()
+
+    debugger._handle_paused(
+        {
+            "from": "thread1",
+            "type": "paused",
+            "why": {"type": "eventBreakpoint", "breakpoint": "event.mouse.click"},
+            "frame": {"actor": "frame7", "where": {"actor": "src1", "line": 3}},
+        }
+    )
+    state = debugger.wait_paused(timeout=1)
+
+    assert state.is_event_breakpoint is True
+    assert state.event_breakpoint == "event.mouse.click"
+    assert state.is_exception is False
+
+
+def test_xhr_breakpoint_round_trip():
+    debugger = _debugger(
+        {
+            ("thread1", "setXHRBreakpoint"): {"value": True},
+            ("thread1", "removeXHRBreakpoint"): {"value": True},
+        }
+    )
+
+    assert debugger.set_xhr_breakpoint("/api/", "GET") is True
+    assert debugger._rdp.calls[-1] == (
+        "thread1",
+        "setXHRBreakpoint",
+        {"path": "/api/", "method": "GET"},
+    )
+
+    assert debugger.remove_xhr_breakpoint("/api/", "GET") is True
+    assert debugger._rdp.calls[-1][1] == "removeXHRBreakpoint"
+
+
+def test_xhr_breakpoint_defaults_match_any_request():
+    debugger = _debugger({("thread1", "setXHRBreakpoint"): {"value": True}})
+
+    debugger.set_xhr_breakpoint()
+
+    _actor, _type, params = debugger._rdp.calls[-1]
+    assert params == {"path": "", "method": "ANY"}
+
+
+def test_xhr_pause_is_identified():
+    debugger = _debugger()
+
+    # 内核用的是大写 XHR，与其他小写驼峰的暂停原因不同
+    debugger._handle_paused(
+        {
+            "from": "thread1",
+            "type": "paused",
+            "why": {"type": "XHR"},
+            "frame": {"actor": "frame7", "where": {"actor": "src1", "line": 3}},
+        }
+    )
+    state = debugger.wait_paused(timeout=1)
+
+    assert state.is_xhr is True
+    assert state.is_event_breakpoint is False
+
+
 def test_api_calls_before_start_raise_clear_error():
     debugger = Debugger(owner=None)
 

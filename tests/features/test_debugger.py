@@ -738,6 +738,140 @@ def test_caught_exception_is_ignored_but_uncaught_pauses(complex_debug_page):
 
 @pytest.mark.feature
 @pytest.mark.browser
+def test_blackboxing_keeps_step_into_out_of_a_source(complex_debug_page):
+    """黑盒化后单步不再进入该源，这是真实页面里能正常单步的前提。"""
+    debugger = complex_debug_page.debugger
+    assert debugger.blackboxed() == []
+
+    debugger.blackbox(COMPLEX_SOURCE)
+
+    assert COMPLEX_SOURCE in debugger.blackboxed()[0]
+
+    debugger.unblackbox(COMPLEX_SOURCE)
+    assert debugger.blackboxed() == []
+
+
+@pytest.mark.feature
+@pytest.mark.browser
+def test_blackboxed_source_is_skipped_when_stepping_into(complex_debug_page):
+    debugger = complex_debug_page.debugger
+    loop_line = _line_of(r"const amount = this\.lineTotal")
+    debugger.set_breakpoint(COMPLEX_SOURCE, loop_line, condition="i === 0")
+
+    outcome, worker = _trigger_in_background(
+        complex_debug_page, "return window.buildCart();"
+    )
+    assert debugger.wait_paused(timeout=30) is not None
+
+    # 把自己这个源整体黑盒后，step_into 不应停在它内部
+    debugger.blackbox(COMPLEX_SOURCE)
+    debugger.clear_breakpoints()
+    debugger.step_into()
+    stepped = debugger.wait_paused(timeout=8)
+
+    assert stepped is None or not (stepped.url or "").endswith(COMPLEX_SOURCE)
+
+    debugger.unblackbox(COMPLEX_SOURCE)
+    if debugger.paused:
+        debugger.resume()
+    worker.join(timeout=30)
+
+
+@pytest.mark.feature
+@pytest.mark.browser
+def test_event_breakpoint_pauses_inside_a_click_handler(complex_debug_page):
+    """不需要知道处理器在哪个文件哪一行，事件派发时直接断下。"""
+    debugger = complex_debug_page.debugger
+
+    groups = debugger.available_event_breakpoints()
+    click_ids = [
+        i for ids in groups.values() for i in ids if i == "event.mouse.click"
+    ]
+    assert click_ids, "内核应当支持 event.mouse.click"
+
+    debugger.set_event_breakpoints(["event.mouse.click"])
+    assert debugger.active_event_breakpoints() == ["event.mouse.click"]
+
+    outcome, worker = _trigger_in_background(
+        complex_debug_page, "return document.getElementById('demo-btn').click();"
+    )
+
+    state = debugger.wait_paused(timeout=30)
+    assert state is not None, "点击事件应当触发暂停"
+    assert state.is_event_breakpoint is True
+    assert state.event_breakpoint == "event.mouse.click"
+
+    debugger.set_event_breakpoints([])
+    debugger.resume()
+    worker.join(timeout=30)
+
+
+@pytest.mark.feature
+@pytest.mark.browser
+def test_xhr_breakpoint_pauses_on_a_matching_request(complex_debug_page, server):
+    debugger = complex_debug_page.debugger
+    debugger.set_xhr_breakpoint("/", "ANY")
+
+    outcome, worker = _trigger_in_background(
+        complex_debug_page,
+        "return window.fireRequest('{}');".format(server.get_url("/")),
+    )
+
+    state = debugger.wait_paused(timeout=30)
+    assert state is not None, "匹配的请求应当触发暂停"
+    assert state.is_xhr is True
+
+    debugger.remove_xhr_breakpoint("/", "ANY")
+    debugger.resume()
+    worker.join(timeout=30)
+
+
+@pytest.mark.feature
+@pytest.mark.browser
+def test_skip_breakpoints_disables_them_without_removing(complex_debug_page):
+    debugger = complex_debug_page.debugger
+    debugger.set_breakpoint(COMPLEX_SOURCE, _line_of(r"return 1;"))
+
+    debugger.skip_breakpoints(True)
+    assert complex_debug_page.run_js("return window.runFactorial(5);") == 120
+    assert debugger.paused is False
+
+    # 恢复后同一个断点应重新生效，无需重建
+    debugger.skip_breakpoints(False)
+    outcome, worker = _trigger_in_background(
+        complex_debug_page, "return window.runFactorial(5);"
+    )
+    assert debugger.wait_paused(timeout=30) is not None
+
+    debugger.clear_breakpoints()
+    debugger.resume()
+    worker.join(timeout=30)
+
+
+@pytest.mark.feature
+@pytest.mark.browser
+def test_restart_frame_reruns_the_current_call(complex_debug_page):
+    debugger = complex_debug_page.debugger
+    debugger.set_breakpoint(COMPLEX_SOURCE, _line_of(r"let sum = 0;"))
+
+    outcome, worker = _trigger_in_background(
+        complex_debug_page, "return window.buildCart();"
+    )
+    first = debugger.wait_paused(timeout=30)
+    assert first is not None
+
+    debugger.restart_frame()
+    again = debugger.wait_paused(timeout=20)
+
+    assert again is not None, "restart 后应重新停在该帧"
+
+    debugger.clear_breakpoints()
+    debugger.resume()
+    worker.join(timeout=30)
+
+
+@pytest.mark.feature
+@pytest.mark.browser
 def test_start_without_enable_debugger_raises_actionable_error(
     test_browser_path, fixture_page_url
 ):

@@ -621,7 +621,7 @@ python examples/w3c_bidi/generate_comparison.py --check
 | 浏览器级能力 | `page.browser_tools` | user context、client window |
 | 脚本能力 | `page.get_realms()` / `page.eval_handle()` / `page.disown_handles()` | realms、远程对象句柄、preload script |
 | Emulation | `page.emulation` | UA、viewport、screen、orientation、媒体特征、viewport meta、JS 开关 |
-| JS 断点调试 | `page.debugger` | 断点、条件断点、单步、调用栈、作用域、读源码、对象展开、异常暂停 |
+| JS 断点调试 | `page.debugger` | 断点、条件断点、事件/XHR 断点、单步、调用栈、作用域、读源码、对象展开、异常暂停、黑盒化 |
 | WebExtension | `page.extensions` | 安装目录扩展、安装 xpi、卸载 |
 | 本地存储 | `page.local_storage` / `page.session_storage` | 读写本地存储和会话存储 |
 
@@ -1822,6 +1822,62 @@ if state.is_exception:
 
 另有 `pause_on_debugger_statement()` 控制是否在 JS 的 `debugger` 语句处暂停。
 
+### 事件断点与 XHR 断点
+
+不需要预先知道处理器写在哪个文件哪一行，直接按行为下断点：
+
+```python
+# 看看内核支持哪些事件（分组名 -> 事件 id 列表）
+print(page.debugger.available_event_breakpoints())
+
+# 任何 click 处理器执行时暂停
+page.debugger.set_event_breakpoints(['event.mouse.click'])
+
+state = page.debugger.wait_paused(timeout=30)
+if state.is_event_breakpoint:
+    print(state.event_breakpoint)      # 'event.mouse.click'
+    print(page.debugger.frames())      # 处理器在哪，一目了然
+
+page.debugger.set_event_breakpoints([])   # 传空列表清除
+```
+
+```python
+# 请求 URL 含 /api/ 时暂停
+page.debugger.set_xhr_breakpoint('/api/', method='GET')
+
+state = page.debugger.wait_paused(timeout=30)
+if state.is_xhr:
+    print(page.debugger.frames())      # 是谁发起的这个请求
+
+page.debugger.remove_xhr_breakpoint('/api/', method='GET')
+```
+
+`path` 传空串、`method` 传 `'ANY'` 即匹配所有请求。这两类断点对「点了没反应」「这个请求哪来的」这种排查特别有效。
+
+### 黑盒化框架代码
+
+真实页面里不做黑盒化，`step_into` 会一头扎进 React / jQuery 内部，很难走回自己的代码：
+
+```python
+page.debugger.blackbox('https://cdn.example.com/react.min.js')
+page.debugger.blackbox('vendor.js', start_line=1, end_line=5000)   # 也可只黑盒某个行区间
+
+print(page.debugger.blackboxed())      # 当前被标记的源
+page.debugger.unblackbox('vendor.js')
+```
+
+同一个 HTML 里的多段内联脚本共用 URL，会被一并标记。
+
+### 其他执行控制
+
+```python
+page.debugger.skip_breakpoints(True)    # 临时忽略全部断点，不必逐个删除
+page.debugger.restart_frame()           # 回到当前帧入口重新执行（副作用不会撤销）
+page.debugger.include_async_frames()    # 调用栈包含异步父帧
+```
+
+`include_async_frames()` 对现代页面很有必要——大量 async/await 之下同步栈往往只剩一层，看不出是谁发起的。打开后帧上的 `asyncCause` 会说明它是被什么衔接过来的。
+
 ### ⚠️ 必读注意事项
 
 **JS 暂停期间，所有依赖 JS 线程的 BiDi 调用都会阻塞到超时**（`run_js`、点击、取元素文本等）。所以触发断点的调用必须放在后台线程：
@@ -1852,6 +1908,8 @@ page.debugger.start(auto_resume_after=30)
 ### 当前限制
 
 - **暂停时无法求任意表达式**。这是协议限制而非未实现：Firefox 的 `evaluateJSAsync` 在暂停期间不投递结果，`frame` actor 也没有 eval 方法。替代做法是用 `scope()` + `expand()` + `get_property()` 读状态。
+- **无法修改变量值**。`environment` actor 的 spec 里 `methods` 是空的，只能读不能写。
+- **无法热替换脚本源码**。Firefox 从未实现 CDP 的 `setScriptSource` 那类 live edit。
 - **只覆盖顶层标签页**，iframe 和 Worker 里的 JS 调试不到。
 - **不做 source map 解析**，服务端只提供 `sourceMapURL` 元数据，压缩代码的行号需要自行映射。
 - RDP 是 Firefox 私有协议，没有跨大版本兼容承诺。

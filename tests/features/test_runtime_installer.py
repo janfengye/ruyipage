@@ -52,13 +52,12 @@ def _make_tar_xz(path, entries, symlink=None):
             "firefox-155.0.en-US.win64-20260829.zip",
             "firefox-155.0-v1.2.66-win64",
         ),
-        # Linux 的 155.0 构建尚未完成，仍指向上一个可用 release
         (
             "linux-x86_64",
-            "v1.2.58",
-            "155.0a1",
-            "firefox-155.0a1.en-US.linux-x86_64.tar.xz",
-            "firefox-155.0a1-v1.2.58-linux-x86_64",
+            "v1.2.66",
+            "155.0",
+            "firefox-155.0.en-US.linux-x86_64.tar.xz",
+            "firefox-155.0-v1.2.66-linux-x86_64",
         ),
     ],
 )
@@ -85,11 +84,10 @@ def test_runtime_manifest_targets_latest_ruyipage_release(
 
 def test_runtime_url_follows_each_platform_release():
     """平台构建进度不同步时，URL 必须跟随该平台自己的 release tag。"""
-    win = runtime_url(RUNTIMES["win64"])
-    linux = runtime_url(RUNTIMES["linux-x86_64"])
+    lagging = dict(RUNTIMES["linux-x86_64"], release="v1.2.58")
 
-    assert "/download/v1.2.66/" in win
-    assert "/download/v1.2.58/" in linux
+    assert "/download/v1.2.66/" in runtime_url(RUNTIMES["win64"])
+    assert "/download/v1.2.58/" in runtime_url(lagging)
 
 
 def test_runtime_url_honours_explicit_base_url_override():

@@ -99,3 +99,21 @@ window.crash = function () {
   const data = { user: { profile: null } };
   return data.user.profile.name;
 };
+
+// 供「事件断点」测试：点击按钮会走到这里
+window.clickCount = 0;
+function onDemoClick(event) {
+  window.clickCount += 1;
+  document.getElementById("out").textContent = "clicked=" + window.clickCount;
+}
+document.addEventListener("DOMContentLoaded", function () {
+  const btn = document.getElementById("demo-btn");
+  if (btn) {
+    btn.addEventListener("click", onDemoClick);
+  }
+});
+
+// 供「XHR 断点」测试
+window.fireRequest = function (url) {
+  return fetch(url).then(function (r) { return r.status; });
+};
