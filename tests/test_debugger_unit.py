@@ -1,10 +1,19 @@
 # -*- coding: utf-8 -*-
 """Debugger 单元：断点列自动解析、暂停状态机、作用域解析。"""
 
+import threading
+import time
+
 import pytest
 
 from ruyipage._configs.firefox_options import FirefoxOptions
-from ruyipage._units.debugger import Debugger, Frame, PausedState
+from ruyipage._units.debugger import (
+    Debugger,
+    Frame,
+    PausedState,
+    RemoteObject,
+    Source,
+)
 from ruyipage.errors import DebuggerError
 
 
@@ -198,6 +207,185 @@ def test_normal_breakpoint_pause_is_not_flagged_as_condition_failure():
 
     assert state.condition_failed is False
     assert state.message is None
+
+
+def test_source_text_returns_inline_string_as_is():
+    debugger = _debugger(
+        {
+            ("thread1", "sources"): {
+                "sources": [{"actor": "src1", "url": "https://x.test/app.js"}]
+            },
+            ("src1", "source"): {
+                "contentType": "text/javascript",
+                "source": "line1\nline2\nline3",
+            },
+        }
+    )
+
+    assert debugger.source_text("https://x.test/app.js") == "line1\nline2\nline3"
+
+
+def test_source_text_stitches_long_string_from_initial_plus_substring():
+    """超过一万字符的源只随包带回开头，其余要按需取回。"""
+    initial = "A" * 1000
+    tail = "B" * 500
+    debugger = _debugger(
+        {
+            ("thread1", "sources"): {
+                "sources": [{"actor": "src1", "url": "https://x.test/big.js"}]
+            },
+            ("src1", "source"): {
+                "source": {
+                    "type": "longString",
+                    "actor": "lstr1",
+                    "length": 1500,
+                    "initial": initial,
+                }
+            },
+            ("lstr1", "substring"): {"substring": tail},
+        }
+    )
+
+    text = debugger.source_text("https://x.test/big.js")
+
+    assert text == initial + tail
+    start_end = next(
+        (params["start"], params["end"])
+        for _actor, type_, params in debugger._rdp.calls
+        if type_ == "substring"
+    )
+    assert start_end == (1000, 1500)
+
+
+def test_source_text_skips_substring_when_initial_is_complete():
+    debugger = _debugger(
+        {
+            ("thread1", "sources"): {
+                "sources": [{"actor": "src1", "url": "https://x.test/app.js"}]
+            },
+            ("src1", "source"): {
+                "source": {
+                    "type": "longString",
+                    "actor": "lstr1",
+                    "length": 5,
+                    "initial": "short",
+                }
+            },
+        }
+    )
+
+    assert debugger.source_text("https://x.test/app.js") == "short"
+    assert not any(t == "substring" for _a, t, _p in debugger._rdp.calls)
+
+
+def test_source_text_accepts_a_source_object():
+    debugger = _debugger({("src9", "source"): {"source": "body"}})
+
+    assert debugger.source_text(Source({"actor": "src9", "url": "u"})) == "body"
+
+
+def test_source_text_reports_undecodable_payload():
+    debugger = _debugger(
+        {
+            ("thread1", "sources"): {
+                "sources": [{"actor": "src1", "url": "https://x.test/m.wasm"}]
+            },
+            ("src1", "source"): {"source": {"actor": "buf1", "length": 8}},
+        }
+    )
+
+    with pytest.raises(DebuggerError, match="无法读取"):
+        debugger.source_text("https://x.test/m.wasm")
+
+
+def test_multiple_inline_scripts_share_one_url_and_are_all_indexed():
+    """HTML 里每段内联 <script> 是独立的源，却共用文档地址。"""
+    debugger = _debugger(
+        {
+            ("thread1", "sources"): {
+                "sources": [
+                    {"actor": "inline1", "url": "https://x.test/page.html"},
+                    {"actor": "inline2", "url": "https://x.test/page.html"},
+                    {"actor": "ext1", "url": "https://x.test/app.js"},
+                ]
+            },
+            ("inline1", "getBreakpointPositionsCompressed"): {
+                "positions": {"7": [4], "8": [4]}
+            },
+            ("inline2", "getBreakpointPositionsCompressed"): {
+                "positions": {"16": [4], "17": [8]}
+            },
+        }
+    )
+
+    lines = debugger.breakable_lines("https://x.test/page.html")
+
+    # 两段脚本的可断点行都要出现，而不是只有最后一段
+    assert lines == [7, 8, 16, 17]
+
+
+def test_breakpoint_on_second_inline_script_resolves_its_own_column():
+    debugger = _debugger(
+        {
+            ("thread1", "sources"): {
+                "sources": [
+                    {"actor": "inline1", "url": "https://x.test/page.html"},
+                    {"actor": "inline2", "url": "https://x.test/page.html"},
+                ]
+            },
+            ("inline1", "getBreakpointPositionsCompressed"): {"positions": {"7": [4]}},
+            ("inline2", "getBreakpointPositionsCompressed"): {"positions": {"16": [8]}},
+        }
+    )
+
+    breakpoint_ = debugger.set_breakpoint("https://x.test/page.html", 16)
+
+    assert breakpoint_.column == 8
+    location = next(
+        params["location"]
+        for _actor, type_, params in debugger._rdp.calls
+        if type_ == "setBreakpoint"
+    )
+    # sourceId 必须指向真正包含该行的那段脚本
+    assert location["sourceId"] == "inline2"
+    assert location["sourceUrl"] == "https://x.test/page.html"
+
+
+def test_unbreakable_line_error_lists_lines_from_every_inline_script():
+    debugger = _debugger(
+        {
+            ("thread1", "sources"): {
+                "sources": [
+                    {"actor": "inline1", "url": "https://x.test/page.html"},
+                    {"actor": "inline2", "url": "https://x.test/page.html"},
+                ]
+            },
+            ("inline1", "getBreakpointPositionsCompressed"): {"positions": {"7": [4]}},
+            ("inline2", "getBreakpointPositionsCompressed"): {"positions": {"16": [8]}},
+        }
+    )
+
+    with pytest.raises(DebuggerError) as excinfo:
+        debugger.set_breakpoint("https://x.test/page.html", 99)
+
+    message = str(excinfo.value)
+    assert "7" in message and "16" in message
+
+
+def test_ambiguous_url_suffix_reports_all_candidates():
+    debugger = _debugger(
+        {
+            ("thread1", "sources"): {
+                "sources": [
+                    {"actor": "a", "url": "https://x.test/a/app.js"},
+                    {"actor": "b", "url": "https://x.test/b/app.js"},
+                ]
+            }
+        }
+    )
+
+    with pytest.raises(DebuggerError, match="匹配到多个地址"):
+        debugger.set_breakpoint("app.js", 1)
 
 
 def test_explicit_column_skips_position_lookup():
@@ -410,6 +598,100 @@ def test_frames_are_parsed_innermost_first():
     assert frames[1].oldest is True
 
 
+def test_scope_walks_out_to_the_function_boundary_by_default():
+    """真实结构：const 在内层 block，函数参数在外层 function 环境。
+
+    只读最内层会得到一个尚未初始化的变量，参数全部丢失。
+    """
+    debugger = _debugger(
+        {
+            ("frame7", "getEnvironment"): {
+                "type": "block",
+                "scopeKind": "function lexical",
+                "bindings": {
+                    "arguments": [],
+                    "variables": {
+                        "tripled": {"value": {"type": "null", "uninitialized": True}}
+                    },
+                },
+                "parent": {
+                    "type": "function",
+                    "scopeKind": "function",
+                    "bindings": {
+                        "arguments": [{"b": {"value": 5}}],
+                        "variables": {},
+                    },
+                    "parent": {
+                        "type": "block",
+                        "scopeKind": "global",
+                        "bindings": {
+                            "variables": {"globalNoise": {"value": {"value": 1}}}
+                        },
+                    },
+                },
+            }
+        }
+    )
+    debugger._handle_paused(PAUSED_PACKET)
+
+    scope = debugger.scope()
+
+    assert scope["b"] == 5, "函数参数必须可见"
+    assert "tripled" in scope
+    assert "globalNoise" not in scope, "默认不应越过全局作用域"
+
+
+def test_scope_include_parents_reaches_global():
+    debugger = _debugger(
+        {
+            ("frame7", "getEnvironment"): {
+                "type": "block",
+                "bindings": {"variables": {"x": {"value": {"value": "inner"}}}},
+                "parent": {
+                    "type": "function",
+                    "bindings": {"variables": {"y": {"value": {"value": "fn"}}}},
+                    "parent": {
+                        "type": "block",
+                        "scopeKind": "global",
+                        "bindings": {"variables": {"g": {"value": {"value": "global"}}}},
+                    },
+                },
+            }
+        }
+    )
+    debugger._handle_paused(PAUSED_PACKET)
+
+    assert debugger.scope() == {"x": "inner", "y": "fn"}
+    assert debugger.scope(include_parents=True) == {
+        "x": "inner",
+        "y": "fn",
+        "g": "global",
+    }
+
+
+def test_inner_scope_shadows_outer():
+    debugger = _debugger(
+        {
+            ("frame7", "getEnvironment"): {
+                "type": "block",
+                "bindings": {"variables": {"x": {"value": {"value": "inner"}}}},
+                "parent": {
+                    "type": "function",
+                    "bindings": {
+                        "variables": {
+                            "x": {"value": {"value": "outer"}},
+                            "only": {"value": {"value": "outer-only"}},
+                        }
+                    },
+                },
+            }
+        }
+    )
+    debugger._handle_paused(PAUSED_PACKET)
+
+    assert debugger.scope() == {"x": "inner", "only": "outer-only"}
+
+
 def test_scope_reads_variables_and_arguments_of_current_frame():
     debugger = _debugger(
         {
@@ -446,26 +728,36 @@ def test_scope_can_walk_parent_chain_with_inner_shadowing_outer():
     debugger = _debugger(
         {
             ("frame7", "getEnvironment"): {
+                "type": "function",
                 "bindings": {"variables": {"x": {"value": {"value": "inner"}}}},
                 "parent": {
+                    "type": "function",
                     "bindings": {
                         "variables": {
                             "x": {"value": {"value": "outer"}},
                             "y": {"value": {"value": "only-outer"}},
                         }
-                    }
+                    },
                 },
             }
         }
     )
     debugger._handle_paused(PAUSED_PACKET)
 
+    # 默认停在第一个 function 边界
     assert debugger.scope() == {"x": "inner"}
+    # 显式要求时继续读闭包
     assert debugger.scope(include_parents=True) == {"x": "inner", "y": "only-outer"}
 
 
-def test_scope_keeps_object_grips_it_cannot_downgrade():
-    grip = {"type": "object", "class": "Array", "actor": "obj3"}
+def test_scope_wraps_objects_so_they_are_readable():
+    """对象不再是原始 grip，而是带解码内容的 RemoteObject。"""
+    grip = {
+        "type": "object",
+        "class": "Array",
+        "actor": "obj3",
+        "preview": {"kind": "ArrayLike", "length": 3, "items": [1, 2, 3]},
+    }
     debugger = _debugger(
         {
             ("frame7", "getEnvironment"): {
@@ -475,7 +767,284 @@ def test_scope_keeps_object_grips_it_cannot_downgrade():
     )
     debugger._handle_paused(PAUSED_PACKET)
 
-    assert debugger.scope()["items"] == grip
+    items = debugger.scope()["items"]
+
+    assert isinstance(items, RemoteObject)
+    assert items.class_name == "Array"
+    assert items.value == [1, 2, 3]
+    assert items.truncated is False
+    assert items.actor == "obj3"
+    assert repr(items) == "<Array [1, 2, 3]>"
+
+
+def test_object_without_preview_still_reports_its_class():
+    grip = {"type": "object", "class": "Window", "actor": "obj9"}
+    debugger = _debugger(
+        {
+            ("frame7", "getEnvironment"): {
+                "bindings": {"variables": {"w": {"value": grip}}}
+            }
+        }
+    )
+    debugger._handle_paused(PAUSED_PACKET)
+
+    w = debugger.scope()["w"]
+
+    assert w.class_name == "Window"
+    assert w.value is None
+    assert w.truncated is True  # 内容未知，需要 expand()
+
+
+def test_objects_compare_by_content_not_actor_id():
+    """暂停池每次 resume 都重建，actor id 会变；比较必须只看内容。
+
+    否则「单步后哪些变量变了」这类对比会把所有对象都误报成变化。
+    """
+    first = RemoteObject(
+        {
+            "class": "Array",
+            "actor": "obj10",
+            "preview": {"kind": "ArrayLike", "length": 2, "items": [1, 2]},
+        }
+    )
+    same_content_new_actor = RemoteObject(
+        {
+            "class": "Array",
+            "actor": "obj77",
+            "preview": {"kind": "ArrayLike", "length": 2, "items": [1, 2]},
+        }
+    )
+    different = RemoteObject(
+        {
+            "class": "Array",
+            "actor": "obj10",
+            "preview": {"kind": "ArrayLike", "length": 3, "items": [1, 2, 3]},
+        }
+    )
+
+    assert first == same_content_new_actor
+    assert first != different
+    assert {k: v for k, v in {"a": first}.items() if {"a": same_content_new_actor}.get(k) != v} == {}
+
+
+def test_truncated_preview_is_flagged():
+    obj = RemoteObject(
+        {
+            "class": "Object",
+            "actor": "obj5",
+            "preview": {
+                "kind": "Object",
+                "ownPropertiesLength": 42,
+                "ownProperties": {"a": {"value": {"value": 1}}},
+            },
+        }
+    )
+
+    assert obj.value == {"a": 1}
+    assert obj.truncated is True
+    assert "截断" in repr(obj)
+
+
+def test_map_like_and_dom_node_previews_are_decoded():
+    map_obj = RemoteObject(
+        {
+            "class": "Map",
+            "actor": "obj6",
+            "preview": {
+                "kind": "MapLike",
+                "size": 1,
+                "entries": [[{"type": "string", "value": "k"}, {"value": 7}]],
+            },
+        }
+    )
+    assert map_obj.value == {"'k'": 7}
+
+    node = RemoteObject(
+        {
+            "class": "HTMLDivElement",
+            "actor": "obj7",
+            "preview": {"kind": "DOMNode", "nodeName": "div", "nodeType": 1},
+        }
+    )
+    assert node.value == {"nodeName": "div", "nodeType": 1}
+
+
+def test_expand_fetches_full_properties():
+    debugger = _debugger(
+        {
+            ("obj3", "prototypeAndProperties"): {
+                "ownProperties": {
+                    "name": {"value": {"type": "string", "value": "x"}},
+                    "count": {"value": {"value": 9}},
+                }
+            }
+        }
+    )
+    debugger._handle_paused(PAUSED_PACKET)
+
+    obj = RemoteObject({"class": "Object", "actor": "obj3"})
+    assert debugger.expand(obj) == {"name": "x", "count": 9}
+
+
+def test_expand_restores_array_like_objects_to_a_list():
+    debugger = _debugger(
+        {
+            ("obj4", "prototypeAndProperties"): {
+                "ownProperties": {
+                    "0": {"value": {"value": "a"}},
+                    "1": {"value": {"value": "b"}},
+                }
+            }
+        }
+    )
+    debugger._handle_paused(PAUSED_PACKET)
+
+    assert debugger.expand("obj4") == ["a", "b"]
+
+
+def test_expand_ignores_the_length_property_when_rebuilding_a_list():
+    """真实数组除了下标还带 length，不能因此退化成 dict。"""
+    debugger = _debugger(
+        {
+            ("arr", "prototypeAndProperties"): {
+                "ownProperties": {
+                    "0": {"value": {"value": 1}},
+                    "1": {"value": {"value": 2}},
+                    "2": {"value": {"value": 3}},
+                    "length": {"value": {"value": 3}},
+                }
+            }
+        }
+    )
+    debugger._handle_paused(PAUSED_PACKET)
+
+    assert debugger.expand("arr") == [1, 2, 3]
+
+
+def test_expand_keeps_dict_shape_for_mixed_keys():
+    debugger = _debugger(
+        {
+            ("mixed", "prototypeAndProperties"): {
+                "ownProperties": {
+                    "0": {"value": {"value": "a"}},
+                    "name": {"value": {"value": "x"}},
+                }
+            }
+        }
+    )
+    debugger._handle_paused(PAUSED_PACKET)
+
+    assert debugger.expand("mixed") == {"0": "a", "name": "x"}
+
+
+def test_expand_recurses_to_requested_depth():
+    debugger = _debugger(
+        {
+            ("outer", "prototypeAndProperties"): {
+                "ownProperties": {
+                    "cfg": {
+                        "value": {"type": "object", "class": "Object", "actor": "inner"}
+                    }
+                }
+            },
+            ("inner", "prototypeAndProperties"): {
+                "ownProperties": {"v": {"value": {"value": 42}}}
+            },
+        }
+    )
+    debugger._handle_paused(PAUSED_PACKET)
+
+    shallow = debugger.expand("outer", depth=1)
+    assert isinstance(shallow["cfg"], RemoteObject)
+
+    deep = debugger.expand("outer", depth=2)
+    assert deep == {"cfg": {"v": 42}}
+
+
+def test_get_property_fetches_a_single_named_property():
+    """大对象（如 window）不能全量展开，按名字定向取。"""
+    debugger = _debugger(
+        {
+            ("obj3", "property"): {
+                "descriptor": {"value": {"type": "string", "value": "hello"}}
+            }
+        }
+    )
+    debugger._handle_paused(PAUSED_PACKET)
+
+    assert debugger.get_property("obj3", "title") == "hello"
+    _actor, _type, params = debugger._rdp.calls[-1]
+    assert params == {"name": "title"}
+
+
+def test_get_property_returns_none_for_missing_property():
+    debugger = _debugger({("obj3", "property"): {"descriptor": None}})
+    debugger._handle_paused(PAUSED_PACKET)
+
+    assert debugger.get_property("obj3", "nope") is None
+
+
+def test_constructor_name_derives_from_prototype():
+    """[[Class]] 对类实例统一是 Object，真类名要从原型的 constructor 派生。"""
+    debugger = _debugger(
+        {
+            ("obj3", "prototypeAndProperties"): {
+                "prototype": {"type": "object", "class": "Object", "actor": "proto3"}
+            },
+            ("proto3", "property"): {
+                "descriptor": {
+                    "value": {"type": "object", "class": "Function", "name": "Cart"}
+                }
+            },
+        }
+    )
+    debugger._handle_paused(PAUSED_PACKET)
+
+    obj = RemoteObject({"class": "Object", "actor": "obj3"})
+    assert debugger.constructor_name(obj) == "Cart"
+
+
+def test_constructor_name_falls_back_to_class_when_unavailable():
+    debugger = _debugger({("obj3", "prototypeAndProperties"): {"prototype": None}})
+    debugger._handle_paused(PAUSED_PACKET)
+
+    obj = RemoteObject({"class": "Object", "actor": "obj3"})
+    assert debugger.constructor_name(obj) == "Object"
+
+
+def test_expand_warns_instead_of_silently_truncating(caplog):
+    """静默截断会让调用方以为属性不存在。"""
+    debugger = _debugger(
+        {
+            ("big", "prototypeAndProperties"): {
+                "ownProperties": {
+                    "p{}".format(i): {"value": {"value": i}} for i in range(20)
+                }
+            }
+        }
+    )
+    debugger._handle_paused(PAUSED_PACKET)
+
+    with caplog.at_level("WARNING", logger="ruyipage"):
+        result = debugger.expand("big", max_items=5)
+
+    assert len(result) == 5
+    assert "get_property" in caplog.text
+
+
+def test_expand_requires_paused_state():
+    debugger = _debugger()
+
+    with pytest.raises(DebuggerError, match="暂停状态"):
+        debugger.expand("obj1")
+
+
+def test_expand_rejects_non_objects():
+    debugger = _debugger()
+    debugger._handle_paused(PAUSED_PACKET)
+
+    with pytest.raises(DebuggerError, match="不是可展开的对象"):
+        debugger.expand(RemoteObject({"class": "Object"}))
 
 
 def test_scope_accepts_explicit_frame():
@@ -500,6 +1069,113 @@ def test_scope_requires_paused():
 
 
 # ── 启动前置校验 ──
+
+
+def test_pause_on_exceptions_sends_reconfigure():
+    debugger = _debugger()
+
+    debugger.pause_on_exceptions()
+
+    assert debugger._rdp.calls[-1] == (
+        "thread1",
+        "reconfigure",
+        {"options": {"pauseOnExceptions": True, "ignoreCaughtExceptions": True}},
+    )
+
+
+def test_pause_on_exceptions_can_include_caught_ones():
+    debugger = _debugger()
+
+    debugger.pause_on_exceptions(True, ignore_caught=False)
+
+    _actor, _type, params = debugger._rdp.calls[-1]
+    assert params["options"]["ignoreCaughtExceptions"] is False
+
+
+def test_pause_on_debugger_statement_toggle():
+    debugger = _debugger()
+
+    debugger.pause_on_debugger_statement(False)
+
+    _actor, _type, params = debugger._rdp.calls[-1]
+    assert params["options"] == {"shouldPauseOnDebuggerStatement": False}
+
+
+def test_exception_pause_exposes_the_thrown_value():
+    debugger = _debugger()
+
+    debugger._handle_paused(
+        {
+            "from": "thread1",
+            "type": "paused",
+            "why": {
+                "type": "exception",
+                "exception": {
+                    "type": "object",
+                    "class": "TypeError",
+                    "actor": "obj1",
+                    "preview": {
+                        "kind": "Error",
+                        "name": "TypeError",
+                        "message": "x is not a function",
+                    },
+                },
+            },
+            "frame": {"actor": "frame7", "where": {"actor": "src1", "line": 12}},
+        }
+    )
+    state = debugger.wait_paused(timeout=1)
+
+    assert state.is_exception is True
+    assert state.exception.class_name == "TypeError"
+    assert state.exception.value["message"] == "x is not a function"
+
+
+def test_breakpoint_pause_is_not_an_exception_pause():
+    debugger = _debugger()
+
+    debugger._handle_paused(PAUSED_PACKET)
+    state = debugger.wait_paused(timeout=1)
+
+    assert state.is_exception is False
+    assert state.exception is None
+
+
+def test_watchdog_auto_resumes_a_forgotten_pause():
+    """无人值守时漏掉 resume 会让页面永久卡死，看门狗兜底。"""
+    debugger = _debugger()
+    debugger._auto_resume_after = 0.05
+
+    debugger._handle_paused(PAUSED_PACKET)
+    assert debugger.paused is True
+
+    time.sleep(0.4)
+
+    assert debugger.paused is False
+    assert any(t == "resume" for _a, t, _p in debugger._rdp.calls)
+
+
+def test_watchdog_is_disarmed_by_a_normal_resume():
+    debugger = _debugger()
+    debugger._auto_resume_after = 0.05
+
+    debugger._handle_paused(PAUSED_PACKET)
+    debugger.resume()
+    resume_calls = sum(1 for _a, t, _p in debugger._rdp.calls if t == "resume")
+
+    time.sleep(0.3)
+
+    # 看门狗不应再补一次 resume
+    assert sum(1 for _a, t, _p in debugger._rdp.calls if t == "resume") == resume_calls
+
+
+def test_watchdog_is_off_by_default():
+    debugger = _debugger()
+
+    debugger._handle_paused(PAUSED_PACKET)
+    time.sleep(0.2)
+
+    assert debugger.paused is True
 
 
 def test_api_calls_before_start_raise_clear_error():

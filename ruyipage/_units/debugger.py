@@ -59,6 +59,131 @@ class Source(object):
         return "<Source {}>".format(self.url or self.actor)
 
 
+class RemoteObject(object):
+    """暂停现场里的一个 JS 对象。
+
+    RDP 把对象作为「grip」返回：一个带 actor id 的引用，外加一份 ``preview``
+    浅层快照。本类把 preview 解码成可读的 Python 值，同时保留 actor 以便
+    :meth:`Debugger.expand` 取回完整内容。
+
+    相等性只看类名和已解码的内容，**不看 actor id**。对象 actor 存在暂停池里、
+    每次 resume 都会重建，若按 actor 比较，跨单步对比作用域时每个对象都会被
+    误判为「变化了」。
+    """
+
+    __slots__ = ("class_name", "actor", "value", "truncated", "raw")
+
+    def __init__(self, grip):
+        self.raw = grip
+        self.actor = grip.get("actor")
+        self.class_name = grip.get("class") or grip.get("type") or "Object"
+        self.value, self.truncated = _decode_preview(grip)
+
+    def __eq__(self, other):
+        if not isinstance(other, RemoteObject):
+            return NotImplemented
+        return (
+            self.class_name == other.class_name
+            and self.value == other.value
+            and self.truncated == other.truncated
+        )
+
+    def __ne__(self, other):
+        result = self.__eq__(other)
+        return result if result is NotImplemented else not result
+
+    def __hash__(self):
+        return hash((self.class_name, repr(self.value), self.truncated))
+
+    def __repr__(self):
+        suffix = " ...(截断)" if self.truncated else ""
+        if self.value is None:
+            return "<{}>".format(self.class_name)
+        return "<{} {!r}{}>".format(self.class_name, self.value, suffix)
+
+
+def _descriptor_value(descriptor):
+    if not isinstance(descriptor, dict):
+        return descriptor
+    if "value" in descriptor:
+        return _grip_to_python(descriptor["value"])
+    if "get" in descriptor or "set" in descriptor:
+        return "<accessor>"
+    return _grip_to_python(descriptor)
+
+
+def _decode_preview(grip):
+    """把 grip 的 preview 解码成 Python 值。
+
+    Returns:
+        (value, truncated)。preview 只带前若干项，装不下时 truncated 为 True。
+    """
+    preview = grip.get("preview")
+    if not isinstance(preview, dict):
+        return None, bool(grip.get("actor"))
+
+    kind = preview.get("kind")
+
+    if kind == "ArrayLike":
+        items = preview.get("items") or []
+        length = preview.get("length")
+        decoded = [_grip_to_python(item) for item in items]
+        return decoded, bool(length is not None and length > len(items))
+
+    if kind == "Object":
+        own = preview.get("ownProperties") or {}
+        total = preview.get("ownPropertiesLength")
+        decoded = {name: _descriptor_value(d) for name, d in own.items()}
+        return decoded, bool(total is not None and total > len(own))
+
+    if kind == "MapLike":
+        entries = preview.get("entries") or []
+        decoded = {}
+        for entry in entries:
+            if isinstance(entry, (list, tuple)) and len(entry) == 2:
+                decoded[repr(_grip_to_python(entry[0]))] = _grip_to_python(entry[1])
+        size = preview.get("size")
+        return decoded, bool(size is not None and size > len(entries))
+
+    if kind == "DOMNode":
+        node = {
+            key: preview.get(key)
+            for key in ("nodeName", "nodeType", "attributes", "isConnected")
+            if preview.get(key) is not None
+        }
+        return (node or None), False
+
+    # 其余 kind（Error、RegExp、DOMEvent 等）保留 preview 原样，信息量已足够
+    return preview, False
+
+
+def _grip_to_python(grip):
+    """把 RDP grip 转成 Python 值；对象包装成 :class:`RemoteObject`。"""
+    if not isinstance(grip, dict):
+        return grip
+
+    grip_type = grip.get("type")
+
+    if grip_type in ("null", "undefined"):
+        return None
+    if grip_type in ("Infinity", "-Infinity", "NaN"):
+        return float(grip_type.replace("Infinity", "inf"))
+    if grip_type == "longString":
+        initial = grip.get("initial") or ""
+        return initial if len(initial) >= (grip.get("length") or 0) else initial + "…"
+    if grip_type == "symbol":
+        return grip.get("name") or "Symbol()"
+    if grip_type == "BigInt":
+        return grip.get("text")
+    if "value" in grip and grip_type != "object":
+        return grip["value"]
+    if grip.get("actor"):
+        return RemoteObject(grip)
+    if "value" in grip:
+        return grip["value"]
+    return grip
+
+
 class Breakpoint(object):
     """一个已设置的断点。"""
 
@@ -116,13 +241,17 @@ class Frame(object):
 class PausedState(object):
     """一次暂停的快照。"""
 
-    __slots__ = ("why", "message", "frame", "pause_actor", "_raw")
+    __slots__ = ("why", "message", "exception", "frame", "pause_actor", "_raw")
 
     def __init__(self, packet, source_urls=None):
         self._raw = packet
         why = packet.get("why") or {}
         self.why = why.get("type", "")
         self.message = why.get("message")
+        # 异常暂停时带上抛出的值
+        self.exception = (
+            _grip_to_python(why["exception"]) if "exception" in why else None
+        )
         frame_form = packet.get("frame") or {}
         self.frame = Frame(frame_form, source_urls) if frame_form else None
         self.pause_actor = packet.get("actor")
@@ -143,6 +272,11 @@ class PausedState(object):
         具体错误在 :attr:`message`。
         """
         return self.why == "breakpointConditionThrown"
+
+    @property
+    def is_exception(self):
+        """是否因为 JS 抛异常而暂停；抛出的值在 :attr:`exception`。"""
+        return self.why == "exception"
 
     @property
     def raw(self):
@@ -166,8 +300,10 @@ class Debugger(object):
         self._paused_queue = Queue()
         self._state_lock = threading.Lock()
         self._on_paused_cb = None
-        self._source_cache = {}  # {url: Source}
+        self._sources_by_url = {}  # {url: [Source, ...]}
         self._source_urls = {}  # {source actor: url}
+        self._auto_resume_after = None
+        self._watchdog = None
 
     # ── 状态 ──
 
@@ -204,13 +340,17 @@ class Debugger(object):
 
     # ── 生命周期 ──
 
-    def start(self, port=None, host="127.0.0.1", timeout=20):
+    def start(self, port=None, host="127.0.0.1", timeout=20, auto_resume_after=None):
         """连接 devtools server 并 attach 到当前标签页的 thread actor。
 
         Args:
             port: RDP 端口。默认取 ``opts.enable_debugger()`` 配置的端口。
             host: RDP 主机。
             timeout: 单次 RDP 请求超时（秒）。
+            auto_resume_after: 暂停看门狗，单位秒。暂停超过该时长仍未恢复时
+                自动 resume。JS 被断住期间所有依赖它的 BiDi 调用都会阻塞，
+                无人值守的脚本一旦漏掉 ``resume()`` 就会让页面永久卡死，
+                设置本参数可以兜底。``None`` 表示不启用。
 
         Raises:
             DebuggerError: 无法连接（通常是没有调用 ``opts.enable_debugger()``）
@@ -218,6 +358,7 @@ class Debugger(object):
         if self.started:
             return self
 
+        self._auto_resume_after = auto_resume_after
         port = self._resolve_port(port)
         connection = RdpConnection(host=host, port=port, timeout=timeout)
         try:
@@ -266,8 +407,9 @@ class Debugger(object):
         self._thread_actor = None
         self._target_actor = None
         self._breakpoints = []
-        self._source_cache = {}
+        self._sources_by_url = {}
         self._source_urls = {}
+        self._disarm_watchdog()
         with self._state_lock:
             self._paused = None
         return self
@@ -325,21 +467,75 @@ class Debugger(object):
         self._require_started()
         forms = self._rdp.request(self._thread_actor, "sources").get("sources") or []
         result = []
+        by_url = {}
         for form in forms:
             source = Source(form)
             if source.url:
-                self._source_cache[source.url] = source
+                # 一个 URL 可能对应多个源：HTML 页面里的每段内联 <script>
+                # 都是独立的源，但共用文档地址。
+                by_url.setdefault(source.url, []).append(source)
                 self._source_urls[source.actor] = source.url
             if url_contains and url_contains not in source.url:
                 continue
             result.append(source)
+        self._sources_by_url = by_url
         return result
 
-    def breakable_lines(self, url):
-        """返回某个源可下断点的行号列表。"""
+    def source_text(self, url_or_source):
+        """读取源码文本。
+
+        返回的是 JS 引擎正在执行的那一份，因此行号与 ``breakable_lines()``、
+        断点位置、调用栈里的 ``line`` 完全对齐。这一点是自行下载 URL 做不到的：
+        ``eval`` / ``new Function`` / blob 脚本根本没有可下载的地址，而内联
+        ``<script>`` 的行号是相对整个 HTML 文档的。
+
+        Args:
+            url_or_source: 源 URL（支持后缀匹配）或 :class:`Source` 对象。
+
+        Returns:
+            str: 完整源码。内联脚本返回的是整个 HTML 文档。
+
+        Raises:
+            DebuggerError: 源不存在，或返回了无法解码的内容（如 WASM）
+        """
         self._require_started()
-        positions = self._breakpoint_positions(self._resolve_source(url))
-        return sorted(int(line) for line in positions)
+
+        if isinstance(url_or_source, Source):
+            source = url_or_source
+        else:
+            # 内联脚本共用文档地址且都返回同一份 HTML，取第一个即可
+            source = self._resolve_sources(url_or_source)[0]
+
+        body = self._rdp.request(source.actor, "source").get("source")
+
+        if isinstance(body, str):
+            return body
+
+        if isinstance(body, dict) and body.get("type") == "longString":
+            # 超过一万字符的源只随包返回开头一段，其余要按需取回
+            length = int(body.get("length") or 0)
+            initial = body.get("initial") or ""
+            if len(initial) >= length:
+                return initial
+            rest = self._rdp.request(
+                body["actor"], "substring", start=len(initial), end=length
+            ).get("substring", "")
+            return initial + rest
+
+        raise DebuggerError(
+            "无法读取 {} 的源码文本，服务端返回: {!r}".format(source.url, body)
+        )
+
+    def breakable_lines(self, url):
+        """返回某个源可下断点的行号列表。
+
+        URL 对应多段内联脚本时，合并所有脚本的可断点行。
+        """
+        self._require_started()
+        merged = set()
+        for source in self._resolve_sources(url):
+            merged.update(int(line) for line in self._breakpoint_positions(source))
+        return sorted(merged)
 
     def set_breakpoint(self, url, line, column=None, condition=None):
         """在指定源的指定行下断点。
@@ -363,23 +559,26 @@ class Debugger(object):
             DebuggerError: 源不存在或该行不可下断点
         """
         self._require_started()
-        source = self._resolve_source(url)
+        sources = self._resolve_sources(url)
 
         if column is None:
-            positions = self._breakpoint_positions(source)
-            columns = positions.get(str(int(line))) or positions.get(int(line))
-            if not columns:
+            source, columns_or_lines = self._locate_breakable_column(sources, line)
+            if source is None:
                 raise DebuggerError(
                     "{} 第 {} 行不可下断点，可用行: {}".format(
-                        source.url, line, sorted(int(k) for k in positions)
+                        sources[0].url, line, columns_or_lines
                     )
                 )
-            column = sorted(columns)[0]
+            column = columns_or_lines
+        else:
+            source = sources[0]
 
         options = {}
         if condition:
             options["condition"] = condition
 
+        # 同时传 sourceUrl 与 sourceId：服务端在有 sourceUrl 时会把断点应用到
+        # 所有同 URL 的源（正是内联脚本需要的），sourceId 只参与定位键。
         self._rdp.request(
             self._thread_actor,
             "setBreakpoint",
@@ -423,29 +622,31 @@ class Debugger(object):
                 logger.warning("移除断点失败 %s: %s", breakpoint_, exc)
         return self
 
-    def _resolve_source(self, url):
-        source = self._source_cache.get(url)
-        if source is not None:
-            return source
+    def _resolve_sources(self, url):
+        """返回与该 URL 对应的全部源。
 
-        for candidate in self.sources():
-            if candidate.url == url:
-                return candidate
+        HTML 页面里每段内联 ``<script>`` 都是独立的源，却共用文档地址，
+        因此这里返回列表而不是单个源。
+        """
+        sources = self._sources_by_url.get(url)
+        if sources:
+            return sources
+
+        self.sources()
+        sources = self._sources_by_url.get(url)
+        if sources:
+            return sources
 
         # 允许传入后缀，方便 file:// 这类冗长 URL
-        matches = [s for s in self._source_cache.values() if s.url.endswith(url)]
-        if len(matches) == 1:
-            return matches[0]
-        if len(matches) > 1:
+        matched_urls = [u for u in self._sources_by_url if u.endswith(url)]
+        if len(matched_urls) == 1:
+            return self._sources_by_url[matched_urls[0]]
+        if len(matched_urls) > 1:
             raise DebuggerError(
-                "源 URL '{}' 匹配到多个结果: {}".format(
-                    url, [m.url for m in matches]
-                )
+                "源 URL '{}' 匹配到多个地址: {}".format(url, sorted(matched_urls))
             )
         raise DebuggerError(
-            "未找到源 '{}'，已加载: {}".format(
-                url, sorted(self._source_cache)
-            )
+            "未找到源 '{}'，已加载: {}".format(url, sorted(self._sources_by_url))
         )
 
     def _breakpoint_positions(self, source):
@@ -456,7 +657,54 @@ class Debugger(object):
             or {}
         )
 
+    def _locate_breakable_column(self, sources, line):
+        """在同 URL 的多个源里找出包含该行的那个，并返回其首个有效列。"""
+        key = str(int(line))
+        available = set()
+        for source in sources:
+            positions = self._breakpoint_positions(source)
+            available.update(int(item) for item in positions)
+            columns = positions.get(key)
+            if columns:
+                return source, sorted(columns)[0]
+        return None, sorted(available)
+
     # ── 暂停与恢复 ──
+
+    def pause_on_exceptions(self, enabled=True, ignore_caught=True):
+        """异常抛出时自动暂停。
+
+        对自主排查很有用：不必先猜出错位置再下断点，直接让页面跑，
+        在抛异常的现场停下，此时调用栈和作用域都还在。
+
+        Args:
+            enabled: 是否启用。
+            ignore_caught: 忽略会被 ``catch`` 接住的异常。默认忽略，否则
+                页面里正常的 try/catch 流程会频繁触发暂停。
+
+        Returns:
+            self
+        """
+        self._require_started()
+        self._rdp.request(
+            self._thread_actor,
+            "reconfigure",
+            options={
+                "pauseOnExceptions": bool(enabled),
+                "ignoreCaughtExceptions": bool(ignore_caught),
+            },
+        )
+        return self
+
+    def pause_on_debugger_statement(self, enabled=True):
+        """是否在 JS 的 ``debugger`` 语句处暂停（attach 后默认开启）。"""
+        self._require_started()
+        self._rdp.request(
+            self._thread_actor,
+            "reconfigure",
+            options={"shouldPauseOnDebuggerStatement": bool(enabled)},
+        )
+        return self
 
     def wait_paused(self, timeout=30):
         """等待下一次暂停。
@@ -511,6 +759,7 @@ class Debugger(object):
 
         with self._state_lock:
             self._paused = None
+        self._disarm_watchdog()
         self._rdp.request(self._thread_actor, "resume", **params)
         return self
 
@@ -519,6 +768,7 @@ class Debugger(object):
         with self._state_lock:
             self._paused = state
         self._paused_queue.put(state)
+        self._arm_watchdog()
         callback = self._on_paused_cb
         if callback:
             try:
@@ -529,6 +779,35 @@ class Debugger(object):
     def _handle_resumed(self, _packet):
         with self._state_lock:
             self._paused = None
+        self._disarm_watchdog()
+
+    def _arm_watchdog(self):
+        """暂停超时未恢复时自动 resume，避免页面被永久断住。"""
+        seconds = self._auto_resume_after
+        if not seconds:
+            return
+
+        self._disarm_watchdog()
+
+        def _fire():
+            if not self.paused:
+                return
+            logger.warning("暂停已超过 %s 秒，自动恢复执行", seconds)
+            try:
+                self.resume()
+            except Exception as exc:
+                logger.warning("自动恢复失败: %s", exc)
+
+        timer = threading.Timer(seconds, _fire)
+        timer.daemon = True
+        self._watchdog = timer
+        timer.start()
+
+    def _disarm_watchdog(self):
+        timer = self._watchdog
+        self._watchdog = None
+        if timer is not None:
+            timer.cancel()
 
     # ── 调用栈与作用域 ──
 
@@ -555,9 +834,14 @@ class Debugger(object):
     def scope(self, frame=None, include_parents=False):
         """读取某一帧的作用域变量。
 
+        默认沿作用域链向外读到**函数边界**为止：即当前块作用域加上它所属的
+        函数作用域。只读最内层块的话，断点停在 ``const x = ...`` 这类语句上时
+        只能看到一个尚未初始化的变量，函数参数和其余局部变量都会缺失。
+        全局作用域不包含在内，否则会把整个全局对象倒出来。
+
         Args:
             frame: :class:`Frame` 或 frame actor id。默认用当前暂停的帧。
-            include_parents: 是否沿作用域链向上合并外层变量。
+            include_parents: 继续向外读闭包与全局作用域。
                 内层同名变量优先。
 
         Returns:
@@ -581,13 +865,20 @@ class Debugger(object):
             actor = frame
 
         environment = self._rdp.request(actor, "getEnvironment")
-        merged = {}
         chain = []
         node = environment
         while node:
+            if not include_parents and node.get("scopeKind") == "global":
+                break
             chain.append(node)
-            node = node.get("parent") if include_parents else None
+            if not include_parents and node.get("type") == "function":
+                break
+            node = node.get("parent")
 
+        if not chain:
+            chain = [environment]
+
+        merged = {}
         # 由外到内合并，内层同名变量覆盖外层
         for node in reversed(chain):
             merged.update(self._bindings_to_dict(node.get("bindings") or {}))
@@ -600,25 +891,127 @@ class Debugger(object):
         for entry in bindings.get("arguments") or []:
             if isinstance(entry, dict):
                 for name, descriptor in entry.items():
-                    result[name] = Debugger._grip_to_value(
-                        (descriptor or {}).get("value")
-                    )
+                    result[name] = _descriptor_value(descriptor)
 
         variables = bindings.get("variables") or {}
         for name, descriptor in variables.items():
-            result[name] = Debugger._grip_to_value((descriptor or {}).get("value"))
+            result[name] = _descriptor_value(descriptor)
         return result
 
-    @staticmethod
-    def _grip_to_value(grip):
-        """把 RDP grip 转成 Python 值；无法降级的对象原样返回。"""
-        if not isinstance(grip, dict):
-            return grip
-        if "value" in grip:
-            return grip["value"]
-        grip_type = grip.get("type")
-        if grip_type in ("null", "undefined"):
+    def expand(self, obj, depth=1, max_items=100):
+        """完整取回一个对象的属性，突破 preview 的浅层上限。
+
+        ``scope()`` 返回的 :class:`RemoteObject` 只带 preview 快照，Firefox 的
+        preview 最多给十项。需要看全部内容或更深层级时用本方法。
+
+        Args:
+            obj: :class:`RemoteObject`，或直接给对象 actor id。
+            depth: 递归展开层数。1 表示只展开这一层，嵌套对象仍为 RemoteObject。
+            max_items: 单个对象最多取回多少个属性。
+
+        Returns:
+            dict: 属性名到值的映射；数组类对象返回 list。
+
+        Raises:
+            DebuggerError: 当前未暂停，或该值不是可展开的对象
+        """
+        self._require_started()
+        if not self.paused:
+            raise DebuggerError("只能在暂停状态下展开对象")
+
+        actor = obj.actor if isinstance(obj, RemoteObject) else obj
+        if not actor:
+            raise DebuggerError("该值不是可展开的对象: {!r}".format(obj))
+
+        reply = self._rdp.request(actor, "prototypeAndProperties")
+        own = reply.get("ownProperties") or {}
+
+        if len(own) > max_items:
+            logger.warning(
+                "对象有 %d 个属性，只展开了前 %d 个；"
+                "按名字取用 get_property()，或调大 max_items",
+                len(own),
+                max_items,
+            )
+
+        result = {}
+        for index, (name, descriptor) in enumerate(own.items()):
+            if index >= max_items:
+                break
+            value = _descriptor_value(descriptor)
+            if depth > 1 and isinstance(value, RemoteObject) and value.actor:
+                value = self.expand(value, depth=depth - 1, max_items=max_items)
+            result[name] = value
+
+        # 数组类对象的属性名是 "0"/"1"/…，另外还有一个 length，还原成 list 更直观
+        numeric = {name for name in result if name.isdigit()}
+        if numeric and set(result) <= numeric | {"length"}:
+            return [result[name] for name in sorted(numeric, key=int)]
+        return result
+
+    def get_property(self, obj, name):
+        """按名字取对象的单个属性。
+
+        比 :meth:`expand` 更适合大对象：``window`` 有上千个属性，全量展开既慢
+        又会被 ``max_items`` 截断。
+
+        Args:
+            obj: :class:`RemoteObject` 或对象 actor id。
+            name: 属性名。
+
+        Returns:
+            属性值；不存在时返回 None。
+
+        Raises:
+            DebuggerError: 当前未暂停，或该值不是可展开的对象
+        """
+        self._require_started()
+        if not self.paused:
+            raise DebuggerError("只能在暂停状态下读取对象属性")
+
+        actor = obj.actor if isinstance(obj, RemoteObject) else obj
+        if not actor:
+            raise DebuggerError("该值不是可展开的对象: {!r}".format(obj))
+
+        reply = self._rdp.request(actor, "property", name=name)
+        descriptor = reply.get("descriptor")
+        if descriptor is None:
             return None
-        if grip_type in ("Infinity", "-Infinity", "NaN"):
-            return float(grip_type.replace("Infinity", "inf"))
-        return grip
+        return _descriptor_value(descriptor)
+
+    def constructor_name(self, obj):
+        """取对象的构造函数名，例如自定义类实例返回 ``"Cart"``。
+
+        :attr:`RemoteObject.class_name` 反映的是 JS 的 ``[[Class]]`` 内部值，
+        对普通类实例统一是 ``"Object"``。真正的类名要从原型链上的
+        ``constructor`` 派生，因此单独作为一个按需方法（多花一次请求）。
+
+        Args:
+            obj: :class:`RemoteObject` 或对象 actor id。
+
+        Returns:
+            构造函数名；取不到时返回 :attr:`RemoteObject.class_name` 兜底。
+
+        Raises:
+            DebuggerError: 当前未暂停，或该值不是可展开的对象
+        """
+        self._require_started()
+        if not self.paused:
+            raise DebuggerError("只能在暂停状态下读取构造函数名")
+
+        actor = obj.actor if isinstance(obj, RemoteObject) else obj
+        if not actor:
+            raise DebuggerError("该值不是可展开的对象: {!r}".format(obj))
+
+        fallback = obj.class_name if isinstance(obj, RemoteObject) else None
+
+        proto = self._rdp.request(actor, "prototypeAndProperties").get("prototype")
+        if not isinstance(proto, dict) or not proto.get("actor"):
+            return fallback
+
+        descriptor = self._rdp.request(
+            proto["actor"], "property", name="constructor"
+        ).get("descriptor")
+        ctor = (descriptor or {}).get("value") or {}
+        # 函数 grip 带 name / displayName
+        return ctor.get("name") or ctor.get("displayName") or fallback

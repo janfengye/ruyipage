@@ -12,3 +12,9 @@ window.runComputation = function (price, quantity) {
   document.getElementById("out").textContent = "total=" + result;
   return result;
 };
+
+// 供「异常时自动暂停」测试使用
+window.boom = function () {
+  const missing = null;
+  return missing.property.that.does.not.exist;
+};
