@@ -78,6 +78,31 @@ The images below show real scenarios. To keep the GitHub homepage more compact, 
 
 ---
 
+## Two Kernel-Level Capabilities: Fingerprint and Trace
+
+The bundled kernel adds two things at the Firefox source level. Neither depends on BiDi, and page JavaScript cannot see them.
+
+### Fingerprint (fpfile)
+
+A single `--fpfile=` text file decides the entire fingerprint the browser presents: UA, language, timezone, screen, CPU cores, touch, Canvas / audio perturbation, WebGL GPU parameters, font whitelist, WebRTC, voice list, geolocation, plus HTTP / SOCKS5 proxy credentials. Every value is rewritten inside the native C++ getter with no JS function wrapped, so `toString()` still returns `[native code]` and prototype shapes are unchanged. `navigator.webdriver` is always `false`.
+
+Most callers never write it by hand: `opts.smart_fingerprint()` probes the egress IP, matches language / timezone, and picks one of 22 real-machine hardware profiles automatically. To pin a specific machine or tune individual fields, see [`fingerprint/fpfile-fingerprint.md`](fingerprint/fpfile-fingerprint.md) ([中文](fingerprint/fpfile%E6%8C%87%E7%BA%B9%E8%AF%B4%E6%98%8E.md)) — every key's values, aliases, affected APIs, and how to verify it.
+
+### Trace (`MOZ_DOM_*` environment variables)
+
+Set a few environment variables before launch and the kernel logs what happens at runtime: every JS function call (with arguments, return values, closure variables, and the call tree), DOM property reads and writes, Cookie / Storage operations, exceptions, WASM modules and boundary calls, HTTP packets, WebSocket frames. It can also dump, once, every host interface this build exposes, to compare what the page probed against what does not exist in this environment. A separate `MOZ_DOM_API_*` group directly controls the return values of `Date.now` / `performance.now` / `Math.random` / `crypto.getRandomValues`.
+
+```powershell
+$env:MOZ_DOM_TRACE = "1"
+$env:MOZ_DOM_TRACE_FILE = "D:\trace\run.jsonl"
+$env:MOZ_DOM_JSCALL_TRACE = "1"
+& firefox.exe --new-instance -no-remote -profile "D:\profile"
+```
+
+This is the primary tool for analysing anti-bot scripts and reconstructing a JS runtime environment. The switch reference is [`trace/trace-cheatsheet.md`](trace/trace-cheatsheet.md) (63 switches with values, defaults, and activation conditions); output formats, causal-chain lookups, and troubleshooting are in [`trace/README.md`](trace/README.md) (Chinese); the decoder for the binary JSCall output is [`trace/tools/jscall_decode.py`](trace/tools/jscall_decode.py).
+
+---
+
 ## Installation and Usage
 
 ### Installation
@@ -2051,6 +2076,14 @@ By default, smart fingerprinting adds an `about:blank` startup page so the BiDi 
 - The `apply_emulation()` result includes `screen`, `geolocation`, `locale`, `timezone`, and `headers`.
 - WebRTC remains in Firefox native ICE mode unless real addresses are supplied through `webrtc_local_ipv4/ipv6` or `webrtc_public_ipv4/ipv6`. Native ICE may expose a direct srflx address different from HTTP proxy egress; `local_webrtc_*` controls literal exposure of matching host addresses and does not filter every host candidate.
 - Geolocation latitude, longitude, accuracy, altitude, altitude accuracy, heading, and speed are shared across fpfile and BiDi. A numeric `geolocation_timestamp` is Unix epoch milliseconds; timestamps and `prompt`/`denied` permission states stay kernel-managed because BiDi does not represent them.
+
+### Full fpfile field reference
+
+The smart fingerprint API writes the `fpfile` for you, so most callers never touch it by hand. When you need to **pin a specific real-machine profile**, **tune fields the smart flow does not cover** (WebGPU, voice lists, geolocation details, and so on), or **use the kernel without ruyiPage**, every `fpfile` field — value ranges, aliases, defaults, the JS/HTTP APIs it affects, and how to verify each detection point — is documented in:
+
+**[`fingerprint/fpfile-fingerprint.md`](fingerprint/fpfile-fingerprint.md)** (Chinese version: [`fpfile指纹说明.md`](fingerprint/fpfile%E6%8C%87%E7%BA%B9%E8%AF%B4%E6%98%8E.md))
+
+It covers all ten detection categories (automation detection, hardware/device, Canvas, WebGL, audio, fonts, Navigator consistency, WebRTC/media, timezone/language, anti-hook), plus network proxy and auth, WebGPU, a required-keys checklist, and a one-shot self-check script.
 
 ---
 
