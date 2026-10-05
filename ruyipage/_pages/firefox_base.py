@@ -4119,19 +4119,25 @@ class FirefoxBase(BasePage):
         visit_context(self)
         return roots
 
-    def s_ele(self, locator=None) -> "StaticElement | NoneElement":
+    def s_ele(self, locator=None, index=1) -> "StaticElement | NoneElement":
         """获取静态元素（从当前 HTML 解析，不需要浏览器连接）
 
+        只抓一次页面 HTML，之后的查找、取值、以及在结果上继续
+        ``ele() / eles() / child() / parent() / next() / prev()``
+        全部在本地完成，不再和浏览器通信。
+
         Args:
-            locator: 定位器，None 返回整个页面的静态元素
+            locator: 定位器，写法与 ``ele()`` 完全一致。
+                为 None 时返回整个页面的静态根元素。
+            index: 第几个匹配结果，从 1 开始，负数从后往前数。
 
         Returns:
             StaticElement 或 NoneElement
         """
-        from .._elements.static_element import StaticElement, make_static_ele
+        from .._elements.static_element import make_static_ele
 
         html = self.html
-        return make_static_ele(html, locator)
+        return make_static_ele(html, locator, index=index)
 
     def s_eles(self, locator) -> "list[StaticElement]":
         """获取所有匹配的静态元素

@@ -1202,12 +1202,53 @@ class FirefoxElement(BaseElement):
 
         return []
 
-    def s_ele(self, locator=None) -> "StaticElement | NoneElement":
-        """获取静态子元素"""
+    def s_ele(self, locator=None, index=1) -> "StaticElement | NoneElement":
+        """把当前元素抓成静态快照，再在快照内部查找单个后代元素。
+
+        与 ``ele()`` 的区别：``ele()`` 每次都要走 BiDi 问浏览器，
+        ``s_ele()`` 只抓一次 HTML，之后的查找和取值全在本地内存里完成。
+        一个容器里要抽十几个字段时，能把十几次往返压成一次。
+
+        Args:
+            locator: 定位器，写法与 ``ele()`` 完全一致。
+                为 None 时返回当前元素自身的静态快照。
+            index: 第几个匹配结果，从 1 开始，负数从后往前数。
+
+        Returns:
+            StaticElement 或 NoneElement。
+
+        适用场景：
+            - 列表页逐条抽字段，避免每个字段都来回一次
+            - 页面已经渲染完、后续不需要交互的纯读取场景
+
+        注意：
+            快照在抓取那一刻就和页面脱钩了，之后页面 DOM 的变化不会反映到
+            StaticElement 上，它也不能点击和输入。需要交互请用 ``ele()``。
+        """
         from .static_element import make_static_ele
 
-        html = self.inner_html
-        return make_static_ele(html, locator)
+        # 取 outerHTML 而不是 innerHTML：这样快照的根节点就是当前元素本身，
+        # 在查找结果上调 parent() 可以一路回溯到它，不会凭空断在半路。
+        root = make_static_ele(self.html)
+        if locator is None:
+            return root
+        return root.ele(locator, index=index)
+
+    def s_eles(self, locator) -> "list[StaticElement]":
+        """把当前元素抓成静态快照，再在快照内部查找所有匹配的后代元素。
+
+        Args:
+            locator: 定位器，写法与 ``eles()`` 完全一致。
+
+        Returns:
+            list[StaticElement]: 按文档序排列，没找到返回空列表。
+
+        适用场景：
+            - 一次抓下整个列表容器，再在本地遍历每一行，省掉逐行查询的往返
+        """
+        from .static_element import make_static_ele
+
+        return make_static_ele(self.html).eles(locator)
 
     # ===== 元素刷新 =====
 

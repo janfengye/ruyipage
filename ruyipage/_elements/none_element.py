@@ -51,6 +51,10 @@ class NoneElement(object):
         return ''
 
     @property
+    def raw_text(self) -> str:
+        return ''
+
+    @property
     def html(self) -> str:
         return ''
 
@@ -157,6 +161,9 @@ class NoneElement(object):
 
     def s_ele(self, *args, **kwargs) -> "NoneElement":
         return NoneElement()
+
+    def s_eles(self, *args, **kwargs) -> list:
+        return []
 
     def run_js(self, *args, **kwargs) -> None:
         return None

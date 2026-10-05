@@ -3,7 +3,7 @@
 # │ WARNING: 此文件由 scripts/generate_async_api.py 自动生成          │
 # │ 请勿手动编辑！修改后请重新运行生成器：                               │
 # │   python scripts/generate_async_api.py                          │
-# │ 生成时间: 2026-08-28 22:53:25                                        │
+# │ 生成时间: 2026-10-05 21:49:04                                        │
 # └──────────────────────────────────────────────────────────────────┘
 
 from .greenlet_bridge import greenlet_spawn as _bridge_greenlet_spawn
@@ -437,8 +437,8 @@ class AsyncFirefoxBase(AsyncFirefoxBaseMixin):
         _r = await greenlet_spawn(self._sync.run_js_loaded, script, *args, as_expr=as_expr, timeout=timeout)
         return _wrap_async_result(_r, self)
 
-    async def s_ele(self, locator=None):
-        _r = await greenlet_spawn(self._sync.s_ele, locator=locator)
+    async def s_ele(self, locator=None, index=1):
+        _r = await greenlet_spawn(self._sync.s_ele, locator=locator, index=index)
         return _r  # StaticElement, no async wrapper needed
 
     async def s_eles(self, locator):
@@ -795,9 +795,13 @@ class AsyncFirefoxElement(AsyncFirefoxElementMixin):
         _r = await greenlet_spawn(self._sync.run_js, script, *args)
         return _wrap_async_result(_r, self)
 
-    async def s_ele(self, locator=None):
-        _r = await greenlet_spawn(self._sync.s_ele, locator=locator)
+    async def s_ele(self, locator=None, index=1):
+        _r = await greenlet_spawn(self._sync.s_ele, locator=locator, index=index)
         return _r  # StaticElement, no async wrapper needed
+
+    async def s_eles(self, locator):
+        _r = await greenlet_spawn(self._sync.s_eles, locator)
+        return _r  # list[StaticElement]
 
     async def screenshot(self, path=None, as_bytes=None, as_base64=None):
         _r = await greenlet_spawn(self._sync.screenshot, path=path, as_bytes=as_bytes, as_base64=as_base64)
